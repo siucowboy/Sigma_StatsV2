@@ -367,15 +367,46 @@ export function runFTest(data1: number[], data2: number[]) {
   return { statistic: f, pValue, df1, df2 };
 }
 
-export function runLeveneTest(data1: number[], data2: number[]) {
-  const m1 = jStat.median(data1);
-  const m2 = jStat.median(data2);
-  
-  const z1 = data1.map(x => Math.abs(x - m1));
-  const z2 = data2.map(x => Math.abs(x - m2));
+export function runLeveneTest(groups: number[][]) {
+  const groupMedians = groups.map(g => jStat.median(g));
+  const absDevs = groups.map((g, i) => g.map(x => Math.abs(x - groupMedians[i])));
   
   // Levene's is essentially an ANOVA on absolute deviations from median
-  return runANOVA([z1, z2]);
+  return runANOVA(absDevs);
+}
+
+export function runKruskalWallis(groups: number[][]) {
+  const k = groups.length;
+  const nTotal = groups.reduce((acc, g) => acc + g.length, 0);
+  if (k < 2 || nTotal <= k) return { pValue: 1, statistic: 0, df: 0 };
+
+  const combined = groups.flatMap((g, idx) => g.map(v => ({ v, g: idx }))).sort((a, b) => a.v - b.v);
+
+  // Assign ranks
+  let i = 0;
+  while (i < combined.length) {
+    let j = i;
+    while (j < combined.length && combined[j].v === combined[i].v) {
+      j++;
+    }
+    const rank = (i + j + 1) / 2;
+    for (let k = i; k < j; k++) {
+      (combined[k] as any).rank = rank;
+    }
+    i = j;
+  }
+
+  const groupRankSums = groups.map((_, idx) => 
+    combined.filter(x => x.g === idx).reduce((acc, x) => acc + (x as any).rank, 0)
+  );
+
+  const term1 = 12 / (nTotal * (nTotal + 1));
+  const rankSumPart = groupRankSums.reduce((acc, sum, idx) => acc + (sum ** 2 / groups[idx].length), 0);
+  const h = term1 * rankSumPart - 3 * (nTotal + 1);
+  const df = k - 1;
+  const pValue = 1 - jStat.chisquare.cdf(h, df);
+
+  return { statistic: h, pValue, df, testName: 'Kruskal-Wallis Test' };
 }
 
 export function runMannWhitneyU(data1: number[], data2: number[], alternative: string = 'neq') {

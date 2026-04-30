@@ -32,6 +32,8 @@ import {
   runFTest, 
   runLeveneTest, 
   runMannWhitneyU, 
+  runANOVA,
+  runKruskalWallis,
   getConfidenceInterval, 
   getMedianConfidenceInterval,
   getVarianceConfidenceInterval,
@@ -80,8 +82,14 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
   const tabs = [
     { id: '1-sample', label: '1-Sample T-Test' },
     { id: '2-sample', label: 'Two-Sample Analysis' },
-    { id: 'anova', label: 'One-Way ANOVA (Coming Soon)' }
+    { id: 'anova', label: 'ANOVA (3 or More)' }
   ];
+
+  // ANOVA State
+  const [anovaInputType, setAnovaInputType] = useState<'stacked' | 'unstacked'>('stacked');
+  const [anovaValueId, setAnovaValueId] = useState('');
+  const [anovaGroupId, setAnovaGroupId] = useState('');
+  const [anovaMultiIds, setAnovaMultiIds] = useState<string[]>(['', '', '']);
 
   // --- 1-Sample Calculations ---
   const s1Results = useMemo(() => {
@@ -135,7 +143,7 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
   const isNormal = norm1.pValue > 0.05 && norm2.pValue > 0.05;
 
   // 2. Variance (F-Test if Normal, Levene if not)
-  const varTest = isNormal ? runFTest(data1, data2) : runLeveneTest(data1, data2);
+  const varTest = isNormal ? runFTest(data1, data2) : runLeveneTest([data1, data2]);
   const equalVar = varTest.pValue > 0.05;
 
   // 3. Select Final Test
@@ -214,6 +222,73 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
       qq1, qq2
     };
   }, [activeTab, s2InputType, s2Data1Id, s2Data2Id, s2ValueId, s2GroupId, s2Alt, datasets]);
+
+  // --- ANOVA Calculations & Diagnostics ---
+  const anovaAnalysis = useMemo(() => {
+    if (activeTab !== 'anova') return null;
+
+    let groups: { name: string, data: number[] }[] = [];
+
+    if (anovaInputType === 'stacked') {
+      const valCol = datasets.find(d => d.id === anovaValueId);
+      const grpCol = datasets.find(d => d.id === anovaGroupId);
+      if (valCol && grpCol) {
+        const uniqueGroups = [...new Set(grpCol.values)].filter(g => g !== null && g !== undefined && g !== '');
+        groups = uniqueGroups.map(g => ({
+          name: String(g),
+          data: valCol.values
+            .filter((_: any, i: number) => grpCol.values[i] === g)
+            .map((v: any) => Number(v))
+            .filter((v: any) => !isNaN(v))
+        })).filter(g => g.data.length >= 2);
+      }
+    } else {
+      groups = anovaMultiIds
+        .map(id => {
+          const ds = datasets.find(d => d.id === id);
+          if (!ds) return { name: '', data: [] };
+          return {
+            name: ds.name,
+            data: ds.values.map((v: any) => Number(v)).filter((v: any) => !isNaN(v))
+          };
+        })
+        .filter(g => g.data.length >= 2);
+    }
+
+    if (groups.length < 2) return null;
+
+    const groupDataArray = groups.map(g => g.data);
+    const normalityResults = groups.map(g => ({
+      name: g.name,
+      ...calculateAndersonDarling(g.data)
+    }));
+    const isNormal = normalityResults.every(r => r.pValue > 0.05);
+
+    const varianceTest = runLeveneTest(groupDataArray);
+    const equalVar = varianceTest.pValue > 0.05;
+
+    // We follow user requirement: 
+    // 1. Normal, Check Variance, ANOVA
+    // 2. Non-Normal, Check Variance, Kruskal Wallis
+    const anovaRes = runANOVA(groupDataArray);
+    const kwRes = runKruskalWallis(groupDataArray);
+
+    const pValue = isNormal ? anovaRes.pValue : kwRes.pValue;
+    const testUsed = isNormal ? 'One-Way ANOVA' : 'Kruskal-Wallis';
+
+    return {
+      groups,
+      normalityResults,
+      isNormal,
+      varianceTest,
+      equalVar,
+      anovaRes,
+      kwRes,
+      pValue,
+      testUsed,
+      significant: pValue < 0.05
+    };
+  }, [activeTab, anovaInputType, anovaValueId, anovaGroupId, anovaMultiIds, datasets]);
 
   return (
     <div className="p-6 bg-slate-900 text-slate-100 min-h-screen">
@@ -316,6 +391,74 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                   <option value="greater">Sample 1 &gt; Sample 2</option>
                   <option value="less">Sample 1 &lt; Sample 2</option>
                 </select>
+              </div>
+            )}
+
+            {activeTab === 'anova' && (
+              <div className="space-y-4">
+                <label className="block text-xs uppercase text-slate-500 font-bold">Data Layout</label>
+                <div className="flex bg-slate-900 p-1 rounded border border-slate-700">
+                  <button 
+                    onClick={() => setAnovaInputType('stacked')}
+                    className={`flex-1 py-1 text-xs rounded transition ${anovaInputType === 'stacked' ? 'bg-slate-700 text-white' : 'text-slate-500 hover:text-slate-300'}`}
+                  >
+                    Stacked
+                  </button>
+                  <button 
+                    onClick={() => setAnovaInputType('unstacked')}
+                    className={`flex-1 py-1 text-xs rounded transition ${anovaInputType === 'unstacked' ? 'bg-slate-700 text-white' : 'text-slate-500 hover:text-slate-300'}`}
+                  >
+                    Multi-Column
+                  </button>
+                </div>
+
+                {anovaInputType === 'stacked' ? (
+                  <>
+                    <label className="block text-xs uppercase text-slate-500 font-bold">Value Column</label>
+                    <select className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm" value={anovaValueId} onChange={e => setAnovaValueId(e.target.value)}>
+                      <option value="">Select Variable...</option>
+                      {datasets.filter(d => d.isNumeric).map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                    </select>
+                    <label className="block text-xs uppercase text-slate-500 font-bold">Group Column</label>
+                    <select className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm" value={anovaGroupId} onChange={e => setAnovaGroupId(e.target.value)}>
+                      <option value="">Select Category...</option>
+                      {datasets.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                    </select>
+                  </>
+                ) : (
+                  <div className="space-y-2">
+                    <label className="block text-xs uppercase text-slate-500 font-bold">Data Columns (Min 3)</label>
+                    {anovaMultiIds.map((id, idx) => (
+                      <select 
+                        key={idx}
+                        className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm mb-1" 
+                        value={id} 
+                        onChange={e => {
+                          const newIds = [...anovaMultiIds];
+                          newIds[idx] = e.target.value;
+                          setAnovaMultiIds(newIds);
+                        }}
+                      >
+                        <option value="">Select Group {idx + 1}...</option>
+                        {datasets.filter(d => d.isNumeric).map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                      </select>
+                    ))}
+                    <button 
+                      onClick={() => setAnovaMultiIds([...anovaMultiIds, ''])}
+                      className="text-[10px] text-sky-400 hover:text-sky-300 underline font-bold uppercase tracking-tighter"
+                    >
+                      + Add Group
+                    </button>
+                    {anovaMultiIds.length > 3 && (
+                      <button 
+                        onClick={() => setAnovaMultiIds(anovaMultiIds.slice(0, -1))}
+                        className="text-[10px] text-red-400 hover:text-red-300 underline font-bold uppercase tracking-tighter ml-4"
+                      >
+                        - Remove Group
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -701,8 +844,141 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
           )}
 
           {activeTab === 'anova' && (
-            <div className="bg-slate-800 p-6 rounded-lg border border-slate-700 border-dashed text-slate-500 flex items-center justify-center h-[400px] italic">
-              ANOVA module is being integrated with multiple-dataset handling.
+            <div className="bg-slate-800 p-6 rounded-lg border border-slate-700 shadow-xl space-y-8">
+              <h3 className="text-xl font-bold">ANOVA (3 or More Groups) Analysis</h3>
+              {!anovaAnalysis ? (
+                <div className="h-64 flex items-center justify-center border border-dashed border-slate-700 rounded text-slate-500 italic">
+                  Select at least 2 groups with valid data to run ANOVA.
+                </div>
+              ) : (
+                <div className="space-y-8">
+                  {/* Summary Metric Strip */}
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-center">
+                    <div className="bg-slate-900 p-4 rounded border border-slate-700">
+                      <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">Test Value ({anovaAnalysis.isNormal ? 'F' : 'H'})</div>
+                      <div className="text-2xl font-mono text-red-500 font-bold">
+                        {(anovaAnalysis.isNormal ? anovaAnalysis.anovaRes.statistic : anovaAnalysis.kwRes.statistic).toFixed(3)}
+                      </div>
+                    </div>
+                    <div className="bg-slate-900 p-4 rounded border border-slate-700">
+                      <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">P-Value</div>
+                      <div className={`text-2xl font-mono font-bold ${anovaAnalysis.pValue < 0.05 ? 'text-red-500' : 'text-green-500'}`}>
+                        {anovaAnalysis.pValue.toFixed(4)}
+                      </div>
+                    </div>
+                    <div className="bg-slate-900 p-4 rounded border border-slate-700">
+                      <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">Test Used</div>
+                      <div className="text-xs mt-2 font-bold text-slate-300">
+                        {anovaAnalysis.testUsed}
+                      </div>
+                    </div>
+                    <div className="bg-slate-900 p-4 rounded border border-slate-700">
+                      <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">Decision</div>
+                      <div className={`text-xs mt-2 font-bold ${anovaAnalysis.significant ? 'text-red-400' : 'text-green-400'}`}>
+                        {anovaAnalysis.significant ? 'REJECT NULL' : 'FAIL TO REJECT'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    {/* Left Diagnostic Summaries */}
+                    <div className="space-y-6">
+                      <div className="bg-slate-900 p-4 rounded border border-slate-700">
+                        <h4 className="text-xs font-bold text-slate-500 uppercase mb-4 text-center tracking-widest">Normality & Variance Check</h4>
+                        <div className="space-y-3">
+                          <DiagnosticIndicator 
+                            label="Normality (All Groups)" 
+                            passed={anovaAnalysis.isNormal} 
+                            pValue={Math.min(...anovaAnalysis.normalityResults.map(r => r.pValue))} 
+                          />
+                          <DiagnosticIndicator 
+                            label="Equal Variance (Levene)" 
+                            passed={anovaAnalysis.equalVar} 
+                            pValue={anovaAnalysis.varianceTest.pValue} 
+                          />
+                        </div>
+                        <p className="text-[10px] text-slate-500 mt-4 leading-relaxed">
+                          Routing Logic: {anovaAnalysis.isNormal ? 
+                            "Data is normal across all groups. Reporting One-Way ANOVA F-Test results." : 
+                            "Normality failed in one or more groups. Reporting Kruskal-Wallis H-Test (Non-Parametric) results."}
+                        </p>
+                      </div>
+
+                      <div className="bg-slate-900 p-4 rounded border border-slate-700">
+                         <h4 className="text-xs font-bold text-slate-500 uppercase mb-4 text-center tracking-widest text-[#94a3b8]">Distribution Boxplots</h4>
+                         <div className="h-64 overflow-hidden">
+                            <Plot
+                              data={anovaAnalysis.groups.map((g, idx) => ({
+                                x: g.data.map(v => Number(v)).filter(v => !isNaN(v)),
+                                type: 'box' as const,
+                                name: g.name,
+                                marker: { color: ['#38bdf8', '#fbbf24', '#f87171', '#a78bfa', '#34d399'][idx % 5] },
+                                boxpoints: 'outliers' as const,
+                                orientation: 'h' as const
+                              }))}
+                              layout={{
+                                autosize: true,
+                                showlegend: false,
+                                margin: { l: 80, r: 20, t: 10, b: 30 },
+                                paper_bgcolor: 'transparent',
+                                plot_bgcolor: 'transparent',
+                                font: { color: '#94a3b8' },
+                                xaxis: {
+                                  gridcolor: '#334155',
+                                  zerolinecolor: '#475569',
+                                  tickfont: { color: '#94a3b8', size: 10 }
+                                },
+                                yaxis: {
+                                  tickfont: { color: '#94a3b8', size: 10 },
+                                  gridcolor: 'transparent'
+                                }
+                              }}
+                              style={{ width: '100%', height: '100%' }}
+                              config={{ displayModeBar: false, responsive: true }}
+                            />
+                         </div>
+                      </div>
+                    </div>
+
+                    {/* Right Results Breakdown */}
+                    <div className="bg-slate-900 p-4 rounded border border-slate-700">
+                      <h4 className="text-xs font-bold text-slate-500 uppercase mb-4 text-center tracking-widest">Group Statistics Table</h4>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-[10px] text-left border-collapse">
+                          <thead>
+                            <tr className="border-b border-slate-700">
+                              <th className="py-2 text-slate-500 uppercase">Group</th>
+                              <th className="py-2 text-center text-slate-500">N</th>
+                              <th className="py-2 text-center text-slate-500">Mean</th>
+                              <th className="py-2 text-center text-slate-500">Median</th>
+                              <th className="py-2 text-center text-slate-500">StDev</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {anovaAnalysis.groups.map((g, idx) => (
+                              <tr key={idx} className="border-b border-slate-800/50">
+                                <td className="py-2 text-slate-300 font-medium">{g.name}</td>
+                                <td className="py-2 text-center text-red-500 font-mono">{g.data.length}</td>
+                                <td className="py-2 text-center text-red-500 font-mono">{getMean(g.data).toFixed(2)}</td>
+                                <td className="py-2 text-center text-red-500 font-mono">{getPercentile([...g.data].sort((a,b)=>a-b), 0.5).toFixed(2)}</td>
+                                <td className="py-2 text-center text-red-500 font-mono">{getStdDev(g.data).toFixed(2)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      <div className="mt-8 p-4 bg-slate-950 rounded border border-slate-800">
+                        <h5 className="text-[10px] font-bold text-sky-400 uppercase mb-2 italic">Conclusion</h5>
+                        <p className="text-xs text-slate-400 leading-relaxed">
+                          {anovaAnalysis.significant ? 
+                            `We reject the null hypothesis at the 0.05 significance level. Evidence suggests at least one group mean is significantly different from the others.` : 
+                            `We fail to reject the null hypothesis. There is insufficient evidence to conclude that any group mean differs significantly.`}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
