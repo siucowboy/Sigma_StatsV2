@@ -34,6 +34,7 @@ import {
   runMannWhitneyU, 
   runANOVA,
   runKruskalWallis,
+  runWelchANOVA,
   getConfidenceInterval, 
   getMedianConfidenceInterval,
   getVarianceConfidenceInterval,
@@ -86,6 +87,7 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
   ];
 
   // ANOVA State
+  const [alpha, setAlpha] = useState(0.05);
   const [anovaInputType, setAnovaInputType] = useState<'stacked' | 'unstacked'>('stacked');
   const [anovaValueId, setAnovaValueId] = useState('');
   const [anovaGroupId, setAnovaGroupId] = useState('');
@@ -96,8 +98,10 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
     if (activeTab !== '1-sample' || !s1DataId || s1Target === '') return null;
     const data = datasets.find(d => d.id === s1DataId)?.values.filter((v: any) => typeof v === 'number' && !isNaN(v)) || [];
     if (data.length < 2) return null;
-    return { ...run1SampleTTest(data, Number(s1Target), s1Alt), data };
-  }, [activeTab, s1DataId, s1Target, s1Alt, datasets]);
+    const res = run1SampleTTest(data, Number(s1Target), s1Alt);
+    const ci = getConfidenceInterval(data, 1 - alpha);
+    return { ...res, data, ci, significant: res.pValue < alpha };
+  }, [activeTab, s1DataId, s1Target, s1Alt, datasets, alpha]);
 
   // --- 2-Sample Calculations & Diagnostics ---
   const s2Analysis = useMemo(() => {
@@ -140,11 +144,11 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
   // 1. Normality (Anderson-Darling)
   const norm1 = calculateAndersonDarling(data1);
   const norm2 = calculateAndersonDarling(data2);
-  const isNormal = norm1.pValue > 0.05 && norm2.pValue > 0.05;
+  const isNormal = norm1.pValue > alpha && norm2.pValue > alpha;
 
   // 2. Variance (F-Test if Normal, Levene if not)
   const varTest = isNormal ? runFTest(data1, data2) : runLeveneTest([data1, data2]);
-  const equalVar = varTest.pValue > 0.05;
+  const equalVar = varTest.pValue > alpha;
 
   // 3. Select Final Test
   let testType = '';
@@ -156,55 +160,57 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
   const s1 = getStdDev(data1);
   const s2 = getStdDev(data2);
 
-  if (!isNormal) {
-    testType = 'Mann-Whitney U (Non-Parametric)';
-    results = runMannWhitneyU(data1, data2, s2Alt);
-    const ci1 = getMedianConfidenceInterval(data1);
-    const ci2 = getMedianConfidenceInterval(data2);
-    ci = { 
-      data: [
-        { name: name1, mean: ci1.median, lcl: ci1.lcl, ucl: ci1.ucl, range: [ci1.lcl, ci1.ucl] },
-        { name: name2, mean: ci2.median, lcl: ci2.lcl, ucl: ci2.ucl, range: [ci2.lcl, ci2.ucl] }
-      ],
-      type: 'Medians'
-    };
-  } else if (equalVar) {
-    testType = "Student's T-Test (Equal Variance)";
-    results = run2SampleTTest(data1, data2, s2Alt, true);
-    const ci1 = getConfidenceInterval(data1);
-    const ci2 = getConfidenceInterval(data2);
-    ci = {
-      data: [
-        { name: name1, mean: ci1.mean, lcl: ci1.lcl, ucl: ci1.ucl, range: [ci1.lcl, ci1.ucl] },
-        { name: name2, mean: ci2.mean, lcl: ci2.lcl, ucl: ci2.ucl, range: [ci2.lcl, ci2.ucl] }
-      ],
-      type: 'Means'
-    };
-  } else {
-    testType = "Welch's T-Test (Unequal Variance)";
-    results = run2SampleTTest(data1, data2, s2Alt, false);
-    const ci1 = getConfidenceInterval(data1);
-    const ci2 = getConfidenceInterval(data2);
-    ci = {
-      data: [
-        { name: name1, mean: ci1.mean, lcl: ci1.lcl, ucl: ci1.ucl, range: [ci1.lcl, ci1.ucl] },
-        { name: name2, mean: ci2.mean, lcl: ci2.lcl, ucl: ci2.ucl, range: [ci2.lcl, ci2.ucl] }
-      ],
-      type: 'Means'
-    };
-  }
+    if (!isNormal) {
+      testType = 'Mann-Whitney U (Non-Parametric)';
+      results = runMannWhitneyU(data1, data2, s2Alt);
+      const ci1 = getMedianConfidenceInterval(data1, 1 - alpha);
+      const ci2 = getMedianConfidenceInterval(data2, 1 - alpha);
+      ci = { 
+        data: [
+          { name: name1, mean: ci1.median, lcl: ci1.lcl, ucl: ci1.ucl, range: [ci1.lcl, ci1.ucl] },
+          { name: name2, mean: ci2.median, lcl: ci2.lcl, ucl: ci2.ucl, range: [ci2.lcl, ci2.ucl] }
+        ],
+        type: 'Medians'
+      };
+    } else if (equalVar) {
+      testType = "Student's T-Test (Equal Variance)";
+      results = run2SampleTTest(data1, data2, s2Alt, true);
+      const ci1 = getConfidenceInterval(data1, 1 - alpha);
+      const ci2 = getConfidenceInterval(data2, 1 - alpha);
+      ci = {
+        data: [
+          { name: name1, mean: ci1.mean, lcl: ci1.lcl, ucl: ci1.ucl, range: [ci1.lcl, ci1.ucl] },
+          { name: name2, mean: ci2.mean, lcl: ci2.lcl, ucl: ci2.ucl, range: [ci2.lcl, ci2.ucl] }
+        ],
+        type: 'Means'
+      };
+    } else {
+      testType = "Welch's T-Test (Unequal Variance)";
+      results = run2SampleTTest(data1, data2, s2Alt, false);
+      const ci1 = getConfidenceInterval(data1, 1 - alpha);
+      const ci2 = getConfidenceInterval(data2, 1 - alpha);
+      ci = {
+        data: [
+          { name: name1, mean: ci1.mean, lcl: ci1.lcl, ucl: ci1.ucl, range: [ci1.lcl, ci1.ucl] },
+          { name: name2, mean: ci2.mean, lcl: ci2.lcl, ucl: ci2.ucl, range: [ci2.lcl, ci2.ucl] }
+        ],
+        type: 'Means'
+      };
+    }
 
     // QQ Plot Data
     const qq1 = generateQQData(data1);
     const qq2 = generateQQData(data2);
 
     // SD CI Data
-    const sdCi1 = getVarianceConfidenceInterval(data1);
-    const sdCi2 = getVarianceConfidenceInterval(data2);
+    const sdCi1 = getVarianceConfidenceInterval(data1, 1 - alpha);
+    const sdCi2 = getVarianceConfidenceInterval(data2, 1 - alpha);
     const varCiData = [
       { name: name1, mean: sdCi1.sd, lcl: sdCi1.sdLcl, ucl: sdCi1.sdUcl, range: [sdCi1.sdLcl, sdCi1.sdUcl] },
       { name: name2, mean: sdCi2.sd, lcl: sdCi2.sdLcl, ucl: sdCi2.sdUcl, range: [sdCi2.sdLcl, sdCi2.sdUcl] }
     ];
+
+    const significant = results.pValue < alpha;
 
     return {
       data1, data2, name1, name2,
@@ -219,9 +225,10 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
         med2: getPercentile([...data2].sort((a,b)=>a-b), 0.5),
       },
       varCiData,
-      qq1, qq2
+      qq1, qq2,
+      significant
     };
-  }, [activeTab, s2InputType, s2Data1Id, s2Data2Id, s2ValueId, s2GroupId, s2Alt, datasets]);
+  }, [activeTab, s2InputType, s2Data1Id, s2Data2Id, s2ValueId, s2GroupId, s2Alt, datasets, alpha]);
 
   // --- ANOVA Calculations & Diagnostics ---
   const anovaAnalysis = useMemo(() => {
@@ -262,19 +269,38 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
       name: g.name,
       ...calculateAndersonDarling(g.data)
     }));
-    const isNormal = normalityResults.every(r => r.pValue > 0.05);
+    const isNormal = normalityResults.every(r => r.pValue > alpha);
 
     const varianceTest = runLeveneTest(groupDataArray);
-    const equalVar = varianceTest.pValue > 0.05;
+    const equalVar = varianceTest.pValue > alpha;
 
-    // We follow user requirement: 
-    // 1. Normal, Check Variance, ANOVA
-    // 2. Non-Normal, Check Variance, Kruskal Wallis
+    // Selection Logic:
+    // 1. All Normal, Equal Variance -> One-Way ANOVA
+    // 2. All Normal, Unequal Variance -> Welch's ANOVA
+    // 3. Any Non-Normal -> Kruskal-Wallis
     const anovaRes = runANOVA(groupDataArray);
+    const welchRes = runWelchANOVA(groupDataArray);
     const kwRes = runKruskalWallis(groupDataArray);
 
-    const pValue = isNormal ? anovaRes.pValue : kwRes.pValue;
-    const testUsed = isNormal ? 'One-Way ANOVA' : 'Kruskal-Wallis';
+    let pValue = 0;
+    let testUsed = "";
+    let testResults: any = null;
+
+    if (isNormal) {
+      if (equalVar) {
+        pValue = anovaRes.pValue;
+        testUsed = 'One-Way ANOVA (Equal Variance)';
+        testResults = anovaRes;
+      } else {
+        pValue = welchRes.pValue;
+        testUsed = "Welch's ANOVA (Unequal Variance)";
+        testResults = welchRes;
+      }
+    } else {
+      pValue = kwRes.pValue;
+      testUsed = 'Kruskal-Wallis (Non-Parametric)';
+      testResults = kwRes;
+    }
 
     return {
       groups,
@@ -283,12 +309,14 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
       varianceTest,
       equalVar,
       anovaRes,
+      welchRes,
       kwRes,
       pValue,
       testUsed,
-      significant: pValue < 0.05
+      testResults,
+      significant: pValue < alpha
     };
-  }, [activeTab, anovaInputType, anovaValueId, anovaGroupId, anovaMultiIds, datasets]);
+  }, [activeTab, anovaInputType, anovaValueId, anovaGroupId, anovaMultiIds, alpha, datasets]);
 
   return (
     <div className="p-6 bg-slate-900 text-slate-100 min-h-screen">
@@ -461,6 +489,27 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                 )}
               </div>
             )}
+
+            <div className="pt-6 mt-6 border-t border-slate-800 space-y-4">
+              <div className="flex items-center justify-between">
+                <label className="text-xs uppercase text-slate-500 font-bold">Alpha (Risk)</label>
+                <span className="text-xs font-mono text-sky-400 font-bold">{alpha}</span>
+              </div>
+              <input 
+                type="range" 
+                min="0.01" 
+                max="0.20" 
+                step="0.01" 
+                value={alpha} 
+                onChange={(e) => setAlpha(Number(e.target.value))}
+                className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-sky-500"
+              />
+              <div className="flex justify-between text-[10px] text-slate-600 font-bold">
+                <span>0.01</span>
+                <span>0.10</span>
+                <span>0.20</span>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -482,7 +531,7 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                     </div>
                     <div className="bg-slate-900 p-4 rounded border border-slate-700">
                       <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">P-Value</div>
-                      <div className={`text-2xl font-mono font-bold ${s1Results.pValue < 0.05 ? 'text-red-500' : 'text-green-500'}`}>
+                      <div className={`text-2xl font-mono font-bold ${s1Results.significant ? 'text-red-500' : 'text-green-500'}`}>
                         {s1Results.pValue.toFixed(4)}
                       </div>
                     </div>
@@ -492,8 +541,8 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                     </div>
                     <div className="bg-slate-900 p-4 rounded border border-slate-700">
                       <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">Decision</div>
-                      <div className={`text-xs mt-2 font-bold ${s1Results.pValue < 0.05 ? 'text-red-400' : 'text-green-400'}`}>
-                        {s1Results.pValue < 0.05 ? 'REJECT NULL' : 'FAIL TO REJECT'}
+                      <div className={`text-xs mt-2 font-bold ${s1Results.significant ? 'text-red-400' : 'text-green-400'}`}>
+                        {s1Results.significant ? 'REJECT NULL' : 'FAIL TO REJECT'}
                       </div>
                     </div>
                   </div>
@@ -536,14 +585,15 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                       </div>
                     </div>
 
-                    <div className="bg-slate-900 p-4 rounded border border-slate-700 flex flex-col justify-center">
-                       <p className="text-sm text-slate-200 leading-relaxed italic border-l-4 border-sky-600 pl-4 py-2">
-                        "With a P-Value of {s1Results.pValue.toFixed(4)}, we {s1Results.pValue < 0.05 ? 'have' : 'do not have'} sufficient evidence to suggest the population mean is {s1Alt === 'neq' ? 'different from' : s1Alt === 'greater' ? 'greater than' : 'less than'} {s1Target}."
-                      </p>
+                     <div className="bg-slate-900 p-4 rounded border border-slate-700 flex flex-col justify-center">
+                        <p className="text-sm text-slate-200 leading-relaxed italic border-l-4 border-sky-600 pl-4 py-2">
+                         "With a P-Value of {s1Results.pValue.toFixed(4)}, we {s1Results.significant ? 'have' : 'do not have'} sufficient evidence to suggest the population mean is {s1Alt === 'neq' ? 'different from' : s1Alt === 'greater' ? 'greater than' : 'less than'} {s1Target}."
+                       </p>
                       <div className="mt-4 grid grid-cols-2 gap-2 text-[10px] text-slate-500 font-mono">
                          <div className="bg-slate-800/50 p-2 rounded">N: {s1Results.n}</div>
                          <div className="bg-slate-800/50 p-2 rounded">StDev: {s1Results.sd.toFixed(3)}</div>
                          <div className="bg-slate-800/50 p-2 rounded">Target: {s1Target}</div>
+                         <div className="bg-slate-900/50 p-2 rounded">{(1 - alpha).toFixed(2)} CI: [{s1Results.ci.lcl.toFixed(2)}, {s1Results.ci.ucl.toFixed(2)}]</div>
                          <div className="bg-slate-800/50 p-2 rounded">DF: {s1Results.df}</div>
                       </div>
                     </div>
@@ -625,7 +675,7 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                           </Scatter>
                         </ComposedChart>
                       </ResponsiveContainer>
-                      <p className="text-[10px] text-slate-500 text-center italic mt-2">Standard Deviation 95% Confidence Intervals</p>
+                      <p className="text-[10px] text-slate-500 text-center italic mt-2">Standard Deviation {(1 - alpha).toFixed(2)} Confidence Intervals</p>
                     </div>
                   </div>
                 </div>
@@ -685,7 +735,7 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                              </div>
                              <div className="flex justify-between items-center text-[10px] bg-slate-900/50 p-2 rounded border border-slate-700/50">
                                 <span className="text-slate-500 uppercase font-bold">{s2Analysis.varTestType} P-Value</span>
-                                <span className={`font-mono font-bold text-sm ${s2Analysis.varTest.pValue < 0.05 ? 'text-red-500' : 'text-green-500'}`}>
+                                <span className={`font-mono font-bold text-sm ${s2Analysis.varTest.pValue < alpha ? 'text-red-500' : 'text-green-500'}`}>
                                   {s2Analysis.varTest.pValue.toFixed(3)}
                                 </span>
                              </div>
@@ -743,12 +793,12 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                              </div>
                              <div className="bg-slate-900/50 p-3 rounded border border-slate-700 text-right">
                                 <p className="text-[10px] text-slate-500 uppercase font-bold mb-1">P-Value</p>
-                                <p className={`text-xl font-mono font-bold ${s2Analysis.results.pValue < 0.05 ? 'text-red-500' : 'text-slate-200'}`}>
+                                <p className={`text-xl font-mono font-bold ${s2Analysis.significant ? 'text-red-500' : 'text-slate-200'}`}>
                                   {s2Analysis.results.pValue.toFixed(3)}
                                 </p>
                              </div>
                              <div className="bg-slate-900/50 p-3 rounded border border-slate-700">
-                                <p className="text-[10px] text-slate-500 uppercase font-bold mb-1">0.95 CI for Difference</p>
+                                <p className="text-[10px] text-slate-500 uppercase font-bold mb-1">{(1 - alpha).toFixed(2)} CI for Difference</p>
                                 <p className="text-xs font-mono font-bold text-red-500">
                                   [{s2Analysis.ci.data[0].lcl.toFixed(3)} to {s2Analysis.ci.data[0].ucl.toFixed(3)}]
                                 </p>
@@ -855,14 +905,14 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                   {/* Summary Metric Strip */}
                   <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-center">
                     <div className="bg-slate-900 p-4 rounded border border-slate-700">
-                      <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">Test Value ({anovaAnalysis.isNormal ? 'F' : 'H'})</div>
+                      <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">Test Value</div>
                       <div className="text-2xl font-mono text-red-500 font-bold">
-                        {(anovaAnalysis.isNormal ? anovaAnalysis.anovaRes.statistic : anovaAnalysis.kwRes.statistic).toFixed(3)}
+                        {anovaAnalysis.testResults.statistic.toFixed(3)}
                       </div>
                     </div>
                     <div className="bg-slate-900 p-4 rounded border border-slate-700">
                       <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">P-Value</div>
-                      <div className={`text-2xl font-mono font-bold ${anovaAnalysis.pValue < 0.05 ? 'text-red-500' : 'text-green-500'}`}>
+                      <div className={`text-2xl font-mono font-bold ${anovaAnalysis.pValue < alpha ? 'text-red-500' : 'text-green-500'}`}>
                         {anovaAnalysis.pValue.toFixed(4)}
                       </div>
                     </div>
@@ -898,9 +948,7 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                           />
                         </div>
                         <p className="text-[10px] text-slate-500 mt-4 leading-relaxed">
-                          Routing Logic: {anovaAnalysis.isNormal ? 
-                            "Data is normal across all groups. Reporting One-Way ANOVA F-Test results." : 
-                            "Normality failed in one or more groups. Reporting Kruskal-Wallis H-Test (Non-Parametric) results."}
+                          Routing Logic: {anovaAnalysis.testUsed} selected based on normality and variance tests.
                         </p>
                       </div>
 
@@ -971,8 +1019,8 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                         <h5 className="text-[10px] font-bold text-sky-400 uppercase mb-2 italic">Conclusion</h5>
                         <p className="text-xs text-slate-400 leading-relaxed">
                           {anovaAnalysis.significant ? 
-                            `We reject the null hypothesis at the 0.05 significance level. Evidence suggests at least one group mean is significantly different from the others.` : 
-                            `We fail to reject the null hypothesis. There is insufficient evidence to conclude that any group mean differs significantly.`}
+                            `We reject the null hypothesis at the ${alpha} significance level. Evidence suggests at least one group mean is significantly different from the others.` : 
+                            `We fail to reject the null hypothesis at the ${alpha} level. There is insufficient evidence to conclude that any group mean differs significantly.`}
                         </p>
                       </div>
                     </div>

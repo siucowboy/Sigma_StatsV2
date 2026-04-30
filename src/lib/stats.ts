@@ -409,6 +409,42 @@ export function runKruskalWallis(groups: number[][]) {
   return { statistic: h, pValue, df, testName: 'Kruskal-Wallis Test' };
 }
 
+export function runWelchANOVA(groups: number[][]) {
+  const k = groups.length;
+  const ns = groups.map(g => g.length);
+  const means = groups.map(g => jStat.mean(g));
+  const vars = groups.map(g => jStat.variance(g, true));
+
+  // 1. Calculate weights (w_i = n_i / s_i^2)
+  const weights = ns.map((n, i) => n / vars[i]);
+  const sumWeights = jStat.sum(weights);
+
+  // 2. Calculate the weighted grand mean
+  const weightedGrandMean = weights.reduce((acc, w, i) => acc + (w * means[i]), 0) / sumWeights;
+
+  // 3. Calculate Lambda (Adjustment factor)
+  const lambdaNum = weights.reduce((acc, w, i) => {
+    return acc + (Math.pow(1 - (w / sumWeights), 2) / (ns[i] - 1));
+  }, 0);
+  const lambda = lambdaNum / (Math.pow(k, 2) - 1);
+
+  // 4. Calculate Welch's F-statistic
+  const msBetween = weights.reduce((acc, w, i) => {
+    return acc + (w * Math.pow(means[i] - weightedGrandMean, 2));
+  }, 0) / (k - 1);
+  
+  const fStat = msBetween / (1 + (2 * (k - 2) * lambda));
+
+  // 5. Calculate Degrees of Freedom (Numerator and Denominator)
+  const df1 = k - 1;
+  const df2 = (k * k - 1) / (3 * lambdaNum);
+
+  // 6. Calculate P-Value
+  const pValue = 1 - jStat.centralF.cdf(fStat, df1, df2);
+
+  return { statistic: fStat, pValue, df1, df2, testName: "Welch's ANOVA" };
+}
+
 export function runMannWhitneyU(data1: number[], data2: number[], alternative: string = 'neq') {
   const n1 = data1.length;
   const n2 = data2.length;
