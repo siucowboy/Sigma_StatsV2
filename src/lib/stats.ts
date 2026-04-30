@@ -121,6 +121,9 @@ export function analyzeCapability(params: any) {
     overallPpmUsl = observedPpmUsl;
   }
 
+  const expectedPpmTotal = expectedPpmLsl + expectedPpmUsl;
+  const overallPpmTotal = overallPpmLsl + overallPpmUsl;
+
   return {
     mean,
     stdevOverall,
@@ -129,9 +132,153 @@ export function analyzeCapability(params: any) {
     normalityPValue: adTestResult.pValue,
     isStable,
     Cp, Cpk, Pp, Ppk,
+    // Z-Bench calculations
+    zBenchWithin: expectedPpmTotal > 0 ? -jStat.normal.inv(expectedPpmTotal / 1000000, 0, 1) : (expectedPpmTotal === 0 ? 6 : null),
+    zBenchOverall: overallPpmTotal > 0 ? -jStat.normal.inv(overallPpmTotal / 1000000, 0, 1) : (overallPpmTotal === 0 ? 6 : null),
     observedPpmLsl, observedPpmUsl, observedPpmTotal: observedPpmLsl + observedPpmUsl,
-    expectedPpmLsl, expectedPpmUsl, expectedPpmTotal: expectedPpmLsl + expectedPpmUsl,
-    overallPpmLsl, overallPpmUsl, overallPpmTotal: overallPpmLsl + overallPpmUsl
+    expectedPpmLsl, expectedPpmUsl, expectedPpmTotal,
+    overallPpmLsl, overallPpmUsl, overallPpmTotal
+  };
+}
+
+// --- Regression Engine ---
+import * as math from 'mathjs';
+
+export function runMultipleRegression(yData: number[], xDataMatrix: number[][], xNames: string[]) {
+  const n = yData.length;
+  const k = xDataMatrix.length; // Number of predictors
+  
+  if (n <= k + 1) return null;
+
+  // Build X matrix with intercept column
+  const X = [];
+  for (let i = 0; i < n; i++) {
+    const row = [1];
+    for (let j = 0; j < k; j++) {
+      row.push(xDataMatrix[j][i]);
+    }
+    X.push(row);
+  }
+
+  const Y = yData.map(y => [y]);
+
+  // Matrix Math: beta = (X'X)^-1 X'Y
+  const Xt = math.transpose(X);
+  const XtX = math.multiply(Xt, X);
+  
+  let XtX_inv;
+  try {
+    XtX_inv = math.inv(XtX);
+  } catch (e) {
+    return null; // Singular matrix
+  }
+  
+  const XtY = math.multiply(Xt, Y);
+  const beta = math.multiply(XtX_inv, XtY) as any;
+
+  // Predictions & Residuals
+  const Y_hat = math.multiply(X, beta) as any;
+  const residuals = yData.map((y, i) => y - Y_hat[i][0]);
+
+  // SSE, SSR, SST
+  const yMean = getMean(yData);
+  const sst = yData.reduce((acc, y) => acc + Math.pow(y - yMean, 2), 0);
+  const sse = residuals.reduce((acc, r) => acc + Math.pow(r, 2), 0);
+  const ssr = sst - sse;
+
+  // Degrees of Freedom
+  const dfTotal = n - 1;
+  const dfModel = k;
+  const dfError = n - k - 1;
+
+  // Mean Squares
+  const msModel = ssr / dfModel;
+  const msError = sse / dfError;
+  const s = Math.sqrt(msError);
+
+  // F-statistic
+  const fStat = msError === 0 ? 0 : msModel / msError;
+  const pValueModel = 1 - jStat.centralF.cdf(fStat, dfModel, dfError);
+
+  // R-squared
+  const rSq = ssr / sst;
+  const rSqAdj = 1 - ((1 - rSq) * (n - 1)) / (n - k - 1);
+
+  // VIF & Tolerance
+  const vif: number[] = [];
+  if (k > 1) {
+    for (let j = 0; j < k; j++) {
+      // Regress Xj against other X's
+      const y_vif = xDataMatrix[j];
+      const x_vif = xDataMatrix.filter((_, idx) => idx !== j);
+      const names_vif = xNames.filter((_, idx) => idx !== j);
+      const subReg = runMultipleRegression(y_vif, x_vif, names_vif);
+      if (subReg) {
+        const v = 1 / (1 - subReg.rSq);
+        vif.push(v);
+      } else {
+        vif.push(1); // Default if singular
+      }
+    }
+  } else {
+    vif.push(1);
+  }
+
+  // Standard Errors of Coefficients
+  // SE(beta_j) = sqrt(MSE * (X'X)^-1_jj)
+  const coeffs = [];
+  for (let j = 0; j <= k; j++) {
+    const b = beta[j][0];
+    const se = Math.sqrt(msError * (XtX_inv as any)[j][j]);
+    const t = se === 0 ? 0 : b / se;
+    const p = 2 * (1 - jStat.studentt.cdf(Math.abs(t), dfError));
+    
+    coeffs.push({
+      term: j === 0 ? 'Constant' : xNames[j - 1],
+      coeff: b,
+      se,
+      t,
+      p,
+      vif: j === 0 ? null : (vif[j - 1] || 1),
+      tolerance: j === 0 ? null : (1 / (vif[j-1] || 1))
+    });
+  }
+
+  // Durbin-Watson Statistic
+  let dwNumerator = 0;
+  for (let i = 1; i < n; i++) {
+    dwNumerator += Math.pow(residuals[i] - residuals[i - 1], 2);
+  }
+  const dwDenominator = residuals.reduce((acc, r) => acc + Math.pow(r, 2), 0);
+  const dw = dwDenominator === 0 ? 0 : dwNumerator / dwDenominator;
+
+  // Normal Probability Plot Calculation
+  const sortedResiduals = [...residuals].sort((a, b) => a - b);
+  const probPlot = sortedResiduals.map((val, i) => {
+    const p = (i + 1 - 0.375) / (n + 0.25);
+    const theoreticalZ = jStat.normal.inv(p, 0, 1);
+    return { observed: val, theoretical: theoreticalZ };
+  });
+
+  return {
+    coeffs,
+    rSq,
+    rSqAdj,
+    s,
+    anova: {
+      model: { df: dfModel, ss: ssr, ms: msModel, f: fStat, p: pValueModel },
+      error: { df: dfError, ss: sse, ms: msError },
+      total: { df: dfTotal, ss: sst }
+    },
+    dw,
+    probPlot,
+    residuals: residuals.map((r, i) => ({
+      order: i + 1,
+      res: r,
+      fit: Y_hat[i][0],
+      // Z-residual
+      z: s === 0 ? 0 : r / s
+    }))
   };
 }
 

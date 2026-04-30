@@ -1,17 +1,103 @@
-import React, { useState } from 'react';
-import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Line, ComposedChart, ReferenceLine } from 'recharts';
+import React, { useState, useMemo } from 'react';
+import { 
+  ScatterChart, 
+  Scatter, 
+  XAxis, 
+  YAxis, 
+  CartesianGrid, 
+  Tooltip as RechartsTooltip, 
+  ResponsiveContainer, 
+  Line, 
+  ComposedChart, 
+  ReferenceLine,
+  Legend,
+  Cell,
+  Bar,
+  BarChart
+} from 'recharts';
+import Plot from 'react-plotly.js';
 import ExportWrapper from './ExportWrapper';
+import { runMultipleRegression, generateDynamicHistogram } from '../lib/stats';
+import { Activity, TrendingUp, Info, Layout, Box, LineChart, BarChart2 } from 'lucide-react';
 
 export default function RegressionModule({ datasets }: { datasets: any[] }) {
   const [responseId, setResponseId] = useState('');
   const [predictorIds, setPredictorIds] = useState<string[]>([]);
-  
-  // Mock data for the 4-in-1 Residuals
-  const residualData = [
-    { order: 1, fit: 10.2, res: 0.5, z: 0.8 },
-    { order: 2, fit: 12.4, res: -1.2, z: -1.5 },
-    { order: 3, fit: 14.1, res: 0.8, z: 1.1 }
-  ];
+  const [plotPredictors, setPlotPredictors] = useState<string[]>([]);
+
+  // --- Calculations ---
+  const results = useMemo(() => {
+    if (!responseId || predictorIds.length === 0) return null;
+    
+    const responseDataset = datasets.find(d => d.id === responseId);
+    if (!responseDataset) return null;
+
+    const xDatasets = predictorIds.map(id => datasets.find(d => d.id === id)).filter(d => !!d);
+    if (xDatasets.length === 0) return null;
+
+    const yData = responseDataset.values.map((v: any) => Number(v)).filter((v: number) => !isNaN(v));
+    const xNames = xDatasets.map(d => d.name);
+    const xDataMatrix = xDatasets.map(d => d.values.map((v: any) => Number(v)));
+
+    // Ensure all have same length
+    const n = yData.length;
+    if (xDataMatrix.some(arr => arr.length !== n)) {
+        console.warn('Dataset lengths mismatch');
+        return null;
+    }
+
+    return runMultipleRegression(yData, xDataMatrix, xNames);
+  }, [responseId, predictorIds, datasets]);
+
+  // Sync plotPredictors when predictorIds change
+  useMemo(() => {
+    if (predictorIds.length > 0) {
+      // If we already have some in plotPredictors, keep valid ones. 
+      // If none, default to the first one available.
+      setPlotPredictors(prev => {
+        const stillValid = prev.filter(id => predictorIds.includes(id));
+        if (stillValid.length === 0) return [predictorIds[0]];
+        return stillValid;
+      });
+    } else {
+      setPlotPredictors([]);
+    }
+  }, [predictorIds]);
+
+  // Derived results
+  const equation = useMemo(() => {
+    if (!results) return 'Select Response and Predictors to see Equation';
+    const constTerm = results.coeffs[0].coeff;
+    let eq = `Y = ${constTerm.toFixed(4)}`;
+    for (let i = 1; i < results.coeffs.length; i++) {
+        const c = results.coeffs[i];
+        eq += ` ${c.coeff >= 0 ? '+' : '-'} ${Math.abs(c.coeff).toFixed(4)}(${c.term})`;
+    }
+    return eq;
+  }, [results]);
+
+  // Histogram Data
+  const residualHistogram = useMemo(() => {
+    if (!results) return [];
+    return generateDynamicHistogram(results.residuals.map(r => r.res));
+  }, [results]);
+
+  const togglePredictor = (id: string) => {
+    if (id === responseId) return;
+    setPredictorIds(prev => {
+      if (prev.includes(id)) return prev.filter(i => i !== id);
+      return [...prev, id];
+    });
+  };
+
+  const togglePlotPredictor = (id: string) => {
+    setPlotPredictors(prev => {
+      if (prev.includes(id)) return prev.filter(i => i !== id);
+      return [...prev, id];
+    });
+  };
+
+  const responseDataset = datasets.find(d => d.id === responseId);
 
   return (
     <div className="p-6 bg-slate-900 text-slate-100 min-h-screen">
@@ -20,127 +106,421 @@ export default function RegressionModule({ datasets }: { datasets: any[] }) {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 items-start">
-        {/* Predictor Selection */}
+        {/* Sidebar Config */}
         <div className="col-span-1 space-y-4">
           <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
-            <h3 className="font-semibold mb-4 text-neon-accent">Model Variables</h3>
+            <h3 className="font-semibold mb-4 text-neon-accent flex items-center gap-2">
+              <Activity size={16} /> Model Variables
+            </h3>
             
             <label className="block text-xs text-slate-400 mb-1">Response Variable (Y)</label>
-            <select className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm mb-4" value={responseId} onChange={e => setResponseId(e.target.value)}>
+            <select 
+              className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm mb-4 focus:ring-1 focus:ring-sky-500 outline-none" 
+              value={responseId} 
+              onChange={e => {
+                setResponseId(e.target.value);
+                setPredictorIds([]); 
+              }}
+            >
               <option value="">Select Response...</option>
               {datasets.filter(d => d.isNumeric).map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
             </select>
 
             <label className="block text-xs text-slate-400 mb-1">Predictor Variables (X)</label>
-            <div className="space-y-2 max-h-[300px] overflow-y-auto custom-scrollbar">
-              {datasets.map(d => (
-                <label key={d.id} className="flex items-center space-x-2 text-sm text-slate-300 bg-slate-900 p-2 rounded border border-slate-700">
-                  <input 
-                    type="checkbox" 
-                    checked={predictorIds.includes(d.id)}
-                    onChange={(e) => {
-                      if (e.target.checked) setPredictorIds([...predictorIds, d.id]);
-                      else setPredictorIds(predictorIds.filter(id => id !== d.id));
-                    }}
-                  />
-                  <span className="truncate">{d.name}</span>
-                  {!d.isNumeric && <span className="text-[10px] bg-amber-900/50 text-amber-400 px-1 rounded ml-auto">Cat</span>}
-                </label>
+            <div className="space-y-2 max-h-[400px] overflow-y-auto custom-scrollbar p-1">
+              {datasets.filter(d => d.id !== responseId).map(d => (
+                <button 
+                  type="button"
+                  key={`pred-row-${d.id}`} 
+                  onClick={() => togglePredictor(d.id)}
+                  className={`flex items-center space-x-3 text-sm p-3 rounded border transition-all cursor-pointer w-full text-left ${predictorIds.includes(d.id) ? 'bg-sky-900/40 border-sky-500 shadow-sm' : 'bg-slate-900 border-slate-700 hover:border-slate-500'}`}
+                >
+                  <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors pointer-events-none ${predictorIds.includes(d.id) ? 'bg-sky-500 border-sky-500' : 'bg-slate-800 border-slate-600'}`}>
+                    {predictorIds.includes(d.id) && <div className="w-2 h-2 bg-white rounded-full"></div>}
+                  </div>
+                  <span className="truncate flex-1 font-medium pointer-events-none">{d.name}</span>
+                  {!d.isNumeric && <span className="text-[10px] bg-amber-900/50 text-amber-400 px-1 rounded uppercase font-bold tracking-tighter pointer-events-none">Cat</span>}
+                </button>
               ))}
             </div>
           </div>
         </div>
 
         {/* Output & Diagnostics */}
-        <div className="col-span-1 lg:col-span-3 space-y-6">
-          <ExportWrapper fileName="regression-metrics">
-            <div className="bg-slate-800 p-6 rounded-lg border border-slate-700">
-              <h3 className="text-lg font-bold mb-4">Regression Equation</h3>
-              <div className="bg-slate-900 p-4 rounded border border-slate-700 text-center font-mono text-lg text-sky-400">
-                Y = 12.4501 + 2.3041(X₁) - 0.8420(X₂)
+        <div className="col-span-1 lg:col-span-3 space-y-6 text-slate-100">
+          
+          {/* Consolidated Statistics Block (Moved UP) */}
+          <ExportWrapper fileName="regression-results-consolidated">
+            <div className="bg-slate-800 rounded-lg border border-slate-700 overflow-hidden shadow-2xl">
+              <div className="p-6 border-b border-slate-700 bg-slate-800/50">
+                <h3 className="text-lg font-bold flex items-center gap-2">
+                    <Layout size={20} className="text-sky-400" /> Model Statistics
+                </h3>
+                <div className="mt-4 bg-slate-900 p-6 rounded border border-slate-700 text-center font-mono text-lg text-sky-400 shadow-inner">
+                  {equation}
+                </div>
+                
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
+                  <div className="bg-slate-900/50 p-4 rounded border border-slate-700/50 text-center">
+                    <div className="text-xs text-slate-500 uppercase tracking-widest font-bold">R-Sq (Adj)</div>
+                    <div className="text-xl font-mono text-white mt-1">{results ? (results.rSqAdj * 100).toFixed(2) : '--'}%</div>
+                  </div>
+                  <div className="bg-slate-900/50 p-4 rounded border border-slate-700/50 text-center">
+                    <div className="text-xs text-slate-500 uppercase tracking-widest font-bold">R-Sq</div>
+                    <div className="text-xl font-mono text-white mt-1">{results ? (results.rSq * 100).toFixed(2) : '--'}%</div>
+                  </div>
+                  <div className="bg-slate-900/50 p-4 rounded border border-slate-700/50 text-center">
+                    <div className="text-xs text-slate-500 uppercase tracking-widest font-bold">S (Error)</div>
+                    <div className="text-xl font-mono text-white mt-1">{results ? results.s.toFixed(4) : '--'}</div>
+                  </div>
+                  <div className="bg-slate-900/50 p-4 rounded border border-slate-700/50 text-center">
+                    <div className="text-xs text-slate-500 uppercase tracking-widest font-bold">Model P-Val</div>
+                    <div className={`text-xl font-mono mt-1 ${results?.anova.model.p < 0.05 ? 'text-emerald-400' : 'text-slate-400'}`}>
+                      {results ? (results.anova.model.p < 0.001 ? '< 0.001' : results.anova.model.p.toFixed(4)) : '--'}
+                    </div>
+                  </div>
+                </div>
               </div>
-              
-              <div className="grid grid-cols-4 gap-4 mt-6">
-                <div className="text-center">
-                  <div className="text-xs text-slate-400 uppercase">R-Sq (Adj)</div>
-                  <div className="text-xl font-mono text-white">84.21%</div>
+
+              {results && (
+                <div className="p-6 space-y-8 bg-slate-800">
+                  {/* Parameter Estimates */}
+                  <div className="space-y-4">
+                    <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider">Parameter Estimates</h4>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-[11px] text-slate-300 font-mono">
+                        <thead className="bg-slate-900/50 text-slate-400">
+                          <tr>
+                            <th className="p-2 text-left">Term</th>
+                            <th className="p-2 text-right">Coefficient</th>
+                            <th className="p-2 text-right">SE Coeff</th>
+                            <th className="p-2 text-right">T-Value</th>
+                            <th className="p-2 text-right">P-Value</th>
+                            <th className="p-2 text-right">VIF</th>
+                            <th className="p-2 text-right">Tolerance</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-700">
+                          {results.coeffs.map((c, i) => (
+                            <tr key={`coeff-${i}`} className="hover:bg-slate-700/30">
+                              <td className="p-2 font-bold text-sky-400">{c.term}</td>
+                              <td className="p-2 text-right">{c.coeff.toFixed(6)}</td>
+                              <td className="p-2 text-right">{c.se.toFixed(6)}</td>
+                              <td className="p-2 text-right">{c.t.toFixed(2)}</td>
+                              <td className={`p-2 text-right ${c.p < 0.05 ? 'text-emerald-400 font-bold' : ''}`}>
+                                  {c.p < 0.001 ? '< 0.001' : c.p.toFixed(4)}
+                              </td>
+                              <td className="p-2 text-right">{c.vif ? c.vif.toFixed(3) : '--'}</td>
+                              <td className="p-2 text-right">{c.tolerance ? c.tolerance.toFixed(3) : '--'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* ANOVA */}
+                  <div className="space-y-4">
+                    <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider">Analysis of Variance</h4>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-[11px] text-slate-300 font-mono">
+                        <thead className="bg-slate-900/50 text-slate-400">
+                          <tr>
+                            <th className="p-2 text-left">Source</th>
+                            <th className="p-2 text-right">DF</th>
+                            <th className="p-2 text-right">SS</th>
+                            <th className="p-2 text-right">MS</th>
+                            <th className="p-2 text-right">F</th>
+                            <th className="p-2 text-right">P</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-700">
+                          <tr className="hover:bg-slate-700/30">
+                            <td className="p-2 font-bold text-sky-400">Model</td>
+                            <td className="p-2 text-right">{results.anova.model.df}</td>
+                            <td className="p-2 text-right">{results.anova.model.ss.toFixed(4)}</td>
+                            <td className="p-2 text-right">{results.anova.model.ms.toFixed(4)}</td>
+                            <td className="p-2 text-right">{results.anova.model.f.toFixed(2)}</td>
+                            <td className="p-2 text-right">{results.anova.model.p < 0.001 ? '< 0.001' : results.anova.model.p.toFixed(4)}</td>
+                          </tr>
+                          <tr className="hover:bg-slate-700/30">
+                            <td className="p-2 font-bold text-slate-500">Error</td>
+                            <td className="p-2 text-right">{results.anova.error.df}</td>
+                            <td className="p-2 text-right">{results.anova.error.ss.toFixed(4)}</td>
+                            <td className="p-2 text-right">{results.anova.error.ms.toFixed(4)}</td>
+                            <td className="p-2 text-right"></td>
+                            <td className="p-2 text-right"></td>
+                          </tr>
+                          <tr className="bg-slate-900/30">
+                            <td className="p-2 font-bold">Total</td>
+                            <td className="p-2 text-right">{results.anova.total.df}</td>
+                            <td className="p-2 text-right">{results.anova.total.ss.toFixed(4)}</td>
+                            <td className="p-2 text-right"></td>
+                            <td className="p-2 text-right"></td>
+                            <td className="p-2 text-right"></td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* Durbin Watson */}
+                  <div className="pt-4 border-t border-slate-700">
+                    <div className="flex justify-between items-center bg-slate-900/50 p-4 rounded border border-slate-700/50">
+                        <div className="flex items-center gap-3">
+                            <div className="p-2 bg-amber-500/10 rounded">
+                                <Info size={16} className="text-amber-500" />
+                            </div>
+                            <div>
+                                <div className="text-[10px] text-slate-500 uppercase font-bold">Durbin-Watson Statistic</div>
+                                <div className="text-lg font-mono text-amber-400 font-bold">{results.dw.toFixed(3)}</div>
+                            </div>
+                        </div>
+                        <p className="text-[10px] text-slate-500 text-right max-w-[200px] italic">
+                            A value near 2.0 indicates no autocorrelation in residuals.
+                        </p>
+                    </div>
+                  </div>
                 </div>
-                <div className="text-center">
-                  <div className="text-xs text-slate-400 uppercase">R-Sq</div>
-                  <div className="text-xl font-mono text-white">85.04%</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-xs text-slate-400 uppercase">S (RMSE)</div>
-                  <div className="text-xl font-mono text-white">1.0425</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-xs text-slate-400 uppercase">P-Value</div>
-                  <div className="text-xl font-mono text-white">&lt; 0.0001</div>
-                </div>
-              </div>
+              )}
             </div>
           </ExportWrapper>
 
-          <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
-            <h3 className="text-md font-bold mb-4">4-in-1 Residual Diagnostics</h3>
-            <div className="grid grid-cols-2 gap-4 h-[400px]">
-              
-              {/* Normal Probability Plot */}
-              <ExportWrapper fileName="residuals-normal-plot">
-                <div className="border border-slate-700 rounded p-2 h-full">
-                  <div className="text-xs text-center text-slate-400 mb-1">Normal Probability Plot</div>
-                  <ResponsiveContainer width="100%" height="90%">
-                    <ComposedChart data={residualData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                      <XAxis dataKey="res" type="number" hide />
-                      <YAxis dataKey="z" type="number" hide />
-                      <Scatter dataKey="z" fill="#38bdf8" />
-                    </ComposedChart>
-                  </ResponsiveContainer>
+          {/* Fitted Line Plot Section */}
+          {results && responseDataset && (
+            <ExportWrapper fileName="fitted-line-plot">
+              <div className="bg-slate-800 p-6 rounded-lg border border-slate-700 shadow-xl">
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
+                  <h3 className="text-lg font-bold flex items-center gap-2">
+                    {plotPredictors.length === 2 ? <Box size={18} className="text-pink-400" /> : <LineChart size={18} className="text-sky-400" />}
+                    {plotPredictors.length === 2 
+                      ? '3D Surface Projection' 
+                      : plotPredictors.length === 1 
+                        ? `Fitted Line Plot: ${datasets.find(d => d.id === plotPredictors[0])?.name}` 
+                        : 'Visualizations (Select 1 or 2 predictors)'}
+                  </h3>
+                  
+                  <div className="flex flex-wrap gap-2">
+                    {predictorIds.length > 0 && (
+                      <div className="flex flex-wrap gap-1 bg-slate-900 rounded p-1 border border-slate-700">
+                        {predictorIds.map(id => (
+                          <button 
+                            key={`toggle-${id}`} 
+                            onClick={() => togglePlotPredictor(id)}
+                            className={`px-3 py-1 rounded text-[10px] font-mono transition-all ${plotPredictors.includes(id) ? 'bg-sky-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}
+                          >
+                            {datasets.find(d => d.id === id)?.name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </ExportWrapper>
 
-              {/* Versus Fits */}
-              <ExportWrapper fileName="residuals-vs-fits">
-                <div className="border border-slate-700 rounded p-2 h-full">
-                  <div className="text-xs text-center text-slate-400 mb-1">Versus Fits</div>
-                  <ResponsiveContainer width="100%" height="90%">
-                    <ScatterChart>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                      <XAxis dataKey="fit" type="number" tick={{fontSize: 10}} />
-                      <YAxis dataKey="res" type="number" tick={{fontSize: 10}} />
-                      <ReferenceLine y={0} stroke="#ef4444" strokeDasharray="3 3" />
-                      <Scatter data={residualData} fill="#38bdf8" />
-                    </ScatterChart>
-                  </ResponsiveContainer>
-                </div>
-              </ExportWrapper>
-              
-              {/* Histogram */}
-              <ExportWrapper fileName="residuals-histogram">
-                <div className="border border-slate-700 rounded p-2 flex items-center justify-center h-full">
-                   <div className="text-slate-500 text-sm">Residual Histogram</div>
-                </div>
-              </ExportWrapper>
+                <div className="h-[500px]">
+                  {plotPredictors.length > 2 ? (
+                    <div className="flex flex-col items-center justify-center h-full text-slate-500 border border-dashed border-slate-700 rounded-lg bg-slate-900/20 px-8 text-center">
+                      <TrendingUp size={48} className="mb-4 opacity-20" />
+                      <p className="text-sm">Direct visualization is limited to 1 or 2 predictors at a time.</p>
+                      <p className="text-xs text-slate-600 mt-2">Deselect some predictors below to see a {plotPredictors.length === 3 ? '3D' : '2D'} plot.</p>
+                    </div>
+                  ) : plotPredictors.length === 2 ? (
+                    <Plot
+                      data={[
+                        {
+                          x: datasets.find(d => d.id === plotPredictors[0])?.values.map(Number),
+                          y: datasets.find(d => d.id === plotPredictors[1])?.values.map(Number),
+                          z: responseDataset.values.map(Number),
+                          type: 'scatter3d',
+                          mode: 'markers',
+                          marker: { 
+                            size: 6, 
+                            color: '#38bdf8', 
+                            opacity: 0.9, 
+                            line: { width: 1, color: '#000' } 
+                          }
+                        }
+                      ]}
+                      layout={{
+                        autosize: true,
+                        margin: { l: 0, r: 0, b: 0, t: 0 },
+                        paper_bgcolor: 'rgba(0,0,0,0)',
+                        plot_bgcolor: 'rgba(0,0,0,0)',
+                        scene: {
+                          xaxis: { title: { text: datasets.find(d => d.id === plotPredictors[0])?.name || 'X1', font: { color: '#94a3b8' } }, gridcolor: '#334155', tickcolor: '#475569', color: '#94a3b8' },
+                          yaxis: { title: { text: datasets.find(d => d.id === plotPredictors[1])?.name || 'X2', font: { color: '#94a3b8' } }, gridcolor: '#334155', tickcolor: '#475569', color: '#94a3b8' },
+                          zaxis: { title: { text: responseDataset.name || 'Y', font: { color: '#94a3b8' } }, gridcolor: '#334155', tickcolor: '#475569', color: '#94a3b8' },
+                          bgcolor: 'rgba(15, 23, 42, 0.5)'
+                        }
+                      }}
+                      config={{ responsive: true, displayModeBar: false }}
+                      style={{ width: '100%', height: '100%' }}
+                    />
+                  ) : plotPredictors.length === 1 ? (
+                    (() => {
+                        const currentX = datasets.find(d => d.id === plotPredictors[0]);
+                        if (!currentX || !results) return null;
+                        const xIdx = predictorIds.indexOf(currentX.id);
+                        
+                        // Calculate offset: constant + sum(beta_j * mean(X_j)) for j != currentX
+                        let offset = results.coeffs[0].coeff;
+                        predictorIds.forEach((id, idx) => {
+                          if (id !== currentX.id) {
+                            const ds = datasets.find(d => d.id === id);
+                            if (ds) {
+                              const values = ds.values.map(Number);
+                              const mean = values.reduce((a, b) => a + b, 0) / values.length;
+                              offset += results.coeffs[idx + 1].coeff * mean;
+                            }
+                          }
+                        });
 
-              {/* Versus Order */}
-              <ExportWrapper fileName="residuals-vs-order">
-                <div className="border border-slate-700 rounded p-2 h-full">
-                  <div className="text-xs text-center text-slate-400 mb-1">Versus Order</div>
-                  <ResponsiveContainer width="100%" height="90%">
-                    <ComposedChart data={residualData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                      <XAxis dataKey="order" type="number" tick={{fontSize: 10}} />
-                      <YAxis dataKey="res" type="number" tick={{fontSize: 10}} />
-                      <ReferenceLine y={0} stroke="#ef4444" strokeDasharray="3 3" />
-                      <Line type="step" dataKey="res" stroke="#94a3b8" strokeWidth={1} dot={<circle r={3} fill="#38bdf8" />} />
-                    </ComposedChart>
-                  </ResponsiveContainer>
-                </div>
-              </ExportWrapper>
+                        const minX = Math.min(...currentX.values.map(Number));
+                        const maxX = Math.max(...currentX.values.map(Number));
+                        const coeff = results.coeffs[xIdx + 1].coeff;
 
+                        return (
+                            <ResponsiveContainer width="100%" height="100%">
+                              <ComposedChart 
+                                data={currentX.values.map((v: any, i: number) => ({
+                                    xValue: Number(v),
+                                    yValue: Number(responseDataset.values[i])
+                                }))}
+                                margin={{ top: 20, right: 30, left: 20, bottom: 20 }}
+                              >
+                                <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                                <XAxis type="number" dataKey="xValue" name={currentX.name} stroke="#94a3b8" domain={['auto', 'auto']} />
+                                <YAxis type="number" dataKey="yValue" name={responseDataset.name} stroke="#94a3b8" domain={['auto', 'auto']} />
+                                <RechartsTooltip 
+                                  cursor={{ strokeDasharray: '3 3' }}
+                                  contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', borderRadius: '8px' }} 
+                                />
+                                <Scatter name="Observed Data" dataKey="yValue" fill="#38bdf8" />
+                                <Line 
+                                  name="Regression Line"
+                                  data={[
+                                    { xValue: minX, yValue: offset + coeff * minX },
+                                    { xValue: maxX, yValue: offset + coeff * maxX }
+                                  ]} 
+                                  type="monotone" 
+                                  dataKey="yValue" 
+                                  stroke="#ef4444" 
+                                  dot={false} 
+                                  strokeWidth={2}
+                                  isAnimationActive={false}
+                                />
+                              </ComposedChart>
+                            </ResponsiveContainer>
+                        );
+                    })()
+                  ) : (
+                    <div className="flex items-center justify-center h-full text-slate-500 border border-dashed border-slate-700 rounded-lg bg-slate-900/20">
+                      <p>Select 1 or 2 predictors from the toggle buttons above to visualize fitting</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </ExportWrapper>
+          )}
+
+          {/* Residual Diagnostics */}
+          {results && (
+            <div className="bg-slate-800 p-6 rounded-lg border border-slate-700 shadow-xl">
+              <h3 className="text-lg font-bold mb-6 flex items-center gap-2">
+                <BarChart2 size={18} className="text-slate-400" /> 4-in-1 Residual Diagnostics
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 h-auto">
+                
+                {/* Normal Probability Plot */}
+                <ExportWrapper fileName="residuals-normal-plot">
+                  <div className="border border-slate-700/50 rounded-lg p-4 h-[300px] bg-slate-900/30">
+                    <div className="text-[10px] text-center text-slate-500 mb-4 uppercase font-bold tracking-widest">Normal Probability Plot</div>
+                    <ResponsiveContainer width="100%" height="85%">
+                      <ScatterChart margin={{ top: 10, right: 30, bottom: 20, left: 10 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                        <XAxis type="number" dataKey="theoretical" name="Theoretical Quantile" stroke="#475569" domain={['auto', 'auto']} label={{ value: 'Theoretical', position: 'insideBottom', offset: -5, fontSize: 10, fill: '#475569' }} />
+                        <YAxis type="number" dataKey="observed" name="Residual" stroke="#475569" domain={['auto', 'auto']} label={{ value: 'Residual', angle: -90, position: 'insideLeft', fontSize: 10, fill: '#475569' }} />
+                        <RechartsTooltip cursor={{ strokeDasharray: '3 3' }} contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', fontSize: '10px' }} />
+                        <Scatter data={results.probPlot} name="Residuals" fill="#38bdf8" />
+                        <ReferenceLine 
+                          segment={[
+                            { x: Math.min(...results.probPlot.map(p => p.theoretical)), y: Math.min(...results.probPlot.map(p => p.theoretical)) * results.s },
+                            { x: Math.max(...results.probPlot.map(p => p.theoretical)), y: Math.max(...results.probPlot.map(p => p.theoretical)) * results.s }
+                          ]}
+                          stroke="#ef4444"
+                          strokeDasharray="5 5"
+                        />
+                      </ScatterChart>
+                    </ResponsiveContainer>
+                  </div>
+                </ExportWrapper>
+
+                {/* Versus Fits */}
+                <ExportWrapper fileName="residuals-vs-fits">
+                  <div className="border border-slate-700/50 rounded-lg p-4 h-[300px] bg-slate-900/30">
+                    <div className="text-[10px] text-center text-slate-500 mb-4 uppercase font-bold tracking-widest">Versus Fits</div>
+                    <ResponsiveContainer width="100%" height="85%">
+                      <ScatterChart margin={{ top: 10, right: 30, bottom: 20, left: 10 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                        <XAxis dataKey="fit" type="number" name="Fitted Value" stroke="#475569" domain={['auto', 'auto']} label={{ value: 'Fitted Value', position: 'insideBottom', offset: -5, fontSize: 10, fill: '#475569' }} />
+                        <YAxis dataKey="res" type="number" name="Residual" stroke="#475569" domain={['auto', 'auto']} label={{ value: 'Residual', angle: -90, position: 'insideLeft', fontSize: 10, fill: '#475569' }} />
+                        <RechartsTooltip cursor={{ strokeDasharray: '3 3' }} contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', fontSize: '10px' }} />
+                        <ReferenceLine y={0} stroke="#ef4444" strokeDasharray="5 5" />
+                        <Scatter data={results.residuals} fill="#fb7185" />
+                      </ScatterChart>
+                    </ResponsiveContainer>
+                  </div>
+                </ExportWrapper>
+                
+                {/* Histogram */}
+                <ExportWrapper fileName="residuals-histogram">
+                  <div className="border border-slate-700/50 rounded-lg p-4 h-[300px] bg-slate-900/30">
+                    <div className="text-[10px] text-center text-slate-500 mb-4 uppercase font-bold tracking-widest">Residual Histogram</div>
+                    <ResponsiveContainer width="100%" height="85%">
+                      <BarChart 
+                        data={residualHistogram.map(h => ({ residualValue: h.x, frequency: h.count }))} 
+                        margin={{ top: 10, right: 30, bottom: 20, left: 10 }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                        <XAxis dataKey="residualValue" type="number" domain={['auto', 'auto']} stroke="#475569" label={{ value: 'Residual', position: 'insideBottom', offset: -5, fontSize: 10, fill: '#475569' }} tickFormatter={(v) => v.toFixed(2)} />
+                        <YAxis stroke="#475569" label={{ value: 'Frequency', angle: -90, position: 'insideLeft', fontSize: 10, fill: '#475569' }} />
+                        <RechartsTooltip contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', fontSize: '10px' }} />
+                        <Bar dataKey="frequency" fill="#fbbf24" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </ExportWrapper>
+
+                {/* Versus Order */}
+                <ExportWrapper fileName="residuals-vs-order">
+                  <div className="border border-slate-700/50 rounded-lg p-4 h-[300px] bg-slate-900/30">
+                    <div className="text-[10px] text-center text-slate-500 mb-4 uppercase font-bold tracking-widest">Versus Order</div>
+                    <ResponsiveContainer width="100%" height="85%">
+                      <ComposedChart 
+                        data={results.residuals.map(r => ({ obsOrder: r.order, resid: r.res }))} 
+                        margin={{ top: 10, right: 30, bottom: 20, left: 10 }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                        <XAxis dataKey="obsOrder" type="number" stroke="#475569" label={{ value: 'Observation Order', position: 'insideBottom', offset: -5, fontSize: 10, fill: '#475569' }} />
+                        <YAxis dataKey="resid" type="number" stroke="#475569" domain={['auto', 'auto']} label={{ value: 'Residual', angle: -90, position: 'insideLeft', fontSize: 10, fill: '#475569' }} />
+                        <RechartsTooltip contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', fontSize: '10px' }} />
+                        <ReferenceLine y={0} stroke="#ef4444" strokeDasharray="5 5" />
+                        <Line 
+                          type="monotone" 
+                          dataKey="resid" 
+                          stroke="#94a3b8" 
+                          strokeWidth={1} 
+                          dot={{ r: 4, fill: '#38bdf8', stroke: '#1e293b', strokeWidth: 1 }} 
+                          isAnimationActive={false} 
+                        />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
+                </ExportWrapper>
+
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
     </div>

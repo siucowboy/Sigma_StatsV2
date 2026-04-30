@@ -256,12 +256,20 @@ export default function CapabilityModule({ datasets }: { datasets: any[] }) {
                     <div className="flex justify-between text-sm"><span className="text-slate-400">PPM &lt; LSL:</span> <span className="font-mono text-white">{results.expectedPpmLsl.toFixed(0)}</span></div>
                     <div className="flex justify-between text-sm"><span className="text-slate-400">PPM &gt; USL:</span> <span className="font-mono text-white">{results.expectedPpmUsl.toFixed(0)}</span></div>
                     <div className="flex justify-between text-sm font-bold mt-2"><span className="text-slate-300">Total PPM:</span> <span className="font-mono text-red-400">{results.expectedPpmTotal.toFixed(0)}</span></div>
+                    <div className="flex justify-between text-sm font-bold mt-2 pt-2 border-t border-slate-700/50">
+                      <span className="text-sky-400">Z Score (Z Bench):</span> 
+                      <span className="font-mono text-sky-400">{results.zBenchWithin ? results.zBenchWithin.toFixed(2) : 'N/A'}</span>
+                    </div>
                 </div>
                 <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
                     <h4 className="text-sm font-semibold text-slate-300 border-b border-slate-700 pb-2 mb-2">Overall Performance (Long Term)</h4>
                     <div className="flex justify-between text-sm"><span className="text-slate-400">PPM &lt; LSL:</span> <span className="font-mono text-white">{results.overallPpmLsl.toFixed(0)}</span></div>
                     <div className="flex justify-between text-sm"><span className="text-slate-400">PPM &gt; USL:</span> <span className="font-mono text-white">{results.overallPpmUsl.toFixed(0)}</span></div>
                     <div className="flex justify-between text-sm font-bold mt-2"><span className="text-slate-300">Total PPM:</span> <span className="font-mono text-red-400">{results.overallPpmTotal.toFixed(0)}</span></div>
+                    <div className="flex justify-between text-sm font-bold mt-2 pt-2 border-t border-slate-700/50">
+                      <span className="text-cyan-400">Z Score (Z Bench):</span> 
+                      <span className="font-mono text-cyan-400">{results.zBenchOverall ? results.zBenchOverall.toFixed(2) : 'N/A'}</span>
+                    </div>
                 </div>
               </div>
             </ExportWrapper>
