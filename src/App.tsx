@@ -1,0 +1,81 @@
+import React, { useState, useEffect } from 'react';
+import { Database, BarChart2, Activity, TrendingUp, Grid, GitCommit } from 'lucide-react';
+import DataManager from './components/DataManager';
+import CapabilityModule from './components/CapabilityModule';
+import HypothesisModule from './components/HypothesisModule';
+import RegressionModule from './components/RegressionModule';
+import DOEModule from './components/DOEModule';
+import SPCModule from './components/SPCModule';
+
+export interface Dataset {
+  id: string;
+  name: string;
+  values: (number | string)[];
+  isNumeric: boolean;
+}
+
+export default function App() {
+  const [activeTab, setActiveTab] = useState('data');
+  
+  // LocalStorage Persistence
+  const [datasets, setDatasets] = useState<Dataset[]>(() => {
+    const saved = localStorage.getItem('sigmaStats_datasets');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  useEffect(() => {
+    localStorage.setItem('sigmaStats_datasets', JSON.stringify(datasets));
+  }, [datasets]);
+
+  const navItems = [
+    { id: 'data', label: 'Data Manager', icon: Database },
+    { id: 'capability', label: 'Process Capability', icon: BarChart2 },
+    { id: 'hypothesis', label: 'Hypothesis Tests', icon: Activity },
+    { id: 'regression', label: 'Regression Analysis', icon: TrendingUp },
+    { id: 'doe', label: 'Factorial DOE', icon: Grid },
+    { id: 'spc', label: 'Control Charts', icon: GitCommit },
+  ];
+
+  return (
+    <div className="flex h-screen bg-slate-950 text-slate-100 font-sans">
+      {/* Sidebar Navigation */}
+      <div className="w-64 bg-slate-900 border-r border-slate-800 flex flex-col">
+        <div className="p-6 border-b border-slate-800">
+          <h1 className="text-xl font-bold tracking-wider text-white">
+            SigmaStats <span className="text-neon-accent text-sky-400">Pro</span>
+          </h1>
+        </div>
+        <nav className="flex-1 py-4">
+          {navItems.map((item) => {
+            const Icon = item.icon;
+            const isActive = activeTab === item.id;
+            return (
+              <button
+                key={item.id}
+                onClick={() => setActiveTab(item.id)}
+                className={`w-full flex items-center px-6 py-3 text-sm transition-colors ${
+                  isActive 
+                    ? 'bg-slate-800 text-sky-400 border-r-2 border-sky-400' 
+                    : 'text-slate-400 hover:bg-slate-800/50 hover:text-slate-200'
+                }`}
+              >
+                <Icon className="w-5 h-5 mr-3" />
+                {item.label}
+              </button>
+            );
+          })}
+        </nav>
+      </div>
+
+      {/* Main Content Area */}
+      <div className="flex-1 overflow-auto">
+        {activeTab === 'data' && <DataManager datasets={datasets} setDatasets={setDatasets} />}
+        {activeTab === 'capability' && <CapabilityModule datasets={datasets} />}
+        {activeTab === 'hypothesis' && <HypothesisModule datasets={datasets} />}
+        {activeTab === 'regression' && <RegressionModule datasets={datasets} />}
+        {activeTab === 'doe' && <DOEModule datasets={datasets} />}
+        {activeTab === 'spc' && <SPCModule datasets={datasets} />}
+      </div>
+    </div>
+  );
+}
