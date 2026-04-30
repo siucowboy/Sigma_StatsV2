@@ -69,12 +69,12 @@ export default function App() {
 
       {/* Main Content Area */}
       <div className="flex-1 overflow-auto">
-        {activeTab === 'data' && <DataManager datasets={datasets} setDatasets={setDatasets} />}
-        {activeTab === 'capability' && <CapabilityModule datasets={datasets} />}
-        {activeTab === 'hypothesis' && <HypothesisModule datasets={datasets} />}
-        {activeTab === 'regression' && <RegressionModule datasets={datasets} />}
-        {activeTab === 'doe' && <DOEModule datasets={datasets} />}
-        {activeTab === 'spc' && <SPCModule datasets={datasets} />}
+        <div className={activeTab === 'data' ? 'block h-full' : 'hidden'}><DataManager datasets={datasets} setDatasets={setDatasets} /></div>
+        <div className={activeTab === 'capability' ? 'block h-full' : 'hidden'}><CapabilityModule datasets={datasets} /></div>
+        <div className={activeTab === 'hypothesis' ? 'block h-full' : 'hidden'}><HypothesisModule datasets={datasets} /></div>
+        <div className={activeTab === 'regression' ? 'block h-full' : 'hidden'}><RegressionModule datasets={datasets} /></div>
+        <div className={activeTab === 'doe' ? 'block h-full' : 'hidden'}><DOEModule datasets={datasets} /></div>
+        <div className={activeTab === 'spc' ? 'block h-full' : 'hidden'}><SPCModule datasets={datasets} /></div>
       </div>
     </div>
   );

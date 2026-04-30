@@ -1,4 +1,5 @@
-import { jStat } from 'jstat';
+import jStatModule from 'jstat';
+const jStat: any = (jStatModule as any).jStat || jStatModule;
 
 // --- Core Descriptive Statistics ---
 export function getMean(data: number[]): number {
@@ -194,12 +195,101 @@ export function generateNormalCurve(mean: number, stdev: number, histData: any[]
 
 // --- Internal Helper Functions ---
 
-function calculateAndersonDarling(data: number[]) {
+export function run1SampleTTest(data: number[], target: number, alternative: string = 'neq') {
+  const n = data.length;
+  if (n < 2) return { pValue: 1, statistic: 0, df: 0, mean: 0, sd: 0, n: 0 };
+
+  const mean = getMean(data);
+  const sd = getStdDev(data);
+  const se = sd / Math.sqrt(n);
+  const t = (mean - target) / se;
+  const df = n - 1;
+
+  let pValue: number;
+  if (alternative === 'greater') {
+    pValue = 1 - jStat.studentt.cdf(t, df);
+  } else if (alternative === 'less') {
+    pValue = jStat.studentt.cdf(t, df);
+  } else {
+    pValue = 2 * (1 - jStat.studentt.cdf(Math.abs(t), df));
+  }
+
+  return { pValue, statistic: t, df, mean, sd, n, testName: '1-Sample T-Test' };
+}
+
+export function run2SampleTTest(data1: number[], data2: number[], alternative: string = 'neq', pooled: boolean = false) {
+  const n1 = data1.length;
+  const n2 = data2.length;
+  if (n1 < 2 || n2 < 2) return { pValue: 1, statistic: 0, df: 0, m1: 0, m2: 0, s1: 0, s2: 0, n1: 0, n2: 0 };
+
+  const m1 = getMean(data1);
+  const m2 = getMean(data2);
+  const s1 = getStdDev(data1);
+  const s2 = getStdDev(data2);
+
+  let t: number, df: number;
+
+  if (pooled) {
+    const sp2 = ((n1 - 1) * s1 ** 2 + (n2 - 1) * s2 ** 2) / (n1 + n2 - 2);
+    const se = Math.sqrt(sp2 * (1 / n1 + 1 / n2));
+    t = se === 0 ? 0 : (m1 - m2) / se;
+    df = n1 + n2 - 2;
+  } else {
+    const se1 = s1 ** 2 / n1;
+    const se2 = s2 ** 2 / n2;
+    const seTotal = Math.sqrt(se1 + se2);
+    t = seTotal === 0 ? 0 : (m1 - m2) / seTotal;
+    df = (seTotal === 0) ? 1 : Math.pow(se1 + se2, 2) / (Math.pow(se1, 2) / (n1 - 1) + Math.pow(se2, 2) / (n2 - 1));
+  }
+
+  let pValue: number;
+  if (alternative === 'greater') {
+    pValue = 1 - jStat.studentt.cdf(t, df);
+  } else if (alternative === 'less') {
+    pValue = jStat.studentt.cdf(t, df);
+  } else {
+    pValue = 2 * (1 - jStat.studentt.cdf(Math.abs(t), df));
+  }
+
+  return { pValue, statistic: t, df, m1, m2, s1, s2, n1, n2, testName: pooled ? "Student's T-Test (Equal Var)" : "Welch's T-Test (Unequal Var)" };
+}
+
+export function runANOVA(groups: number[][]) {
+  const k = groups.length;
+  const nTotal = groups.reduce((acc, g) => acc + g.length, 0);
+  if (k < 2 || nTotal <= k) return { pValue: 1, statistic: 0, dfBetween: 0, dfWithin: 0 };
+
+  const allData = groups.flat();
+  const grandMean = getMean(allData);
+
+  let ssBetween = 0;
+  let ssWithin = 0;
+
+  groups.forEach(g => {
+    const m = getMean(g);
+    ssBetween += g.length * Math.pow(m - grandMean, 2);
+    g.forEach(x => {
+      ssWithin += Math.pow(x - m, 2);
+    });
+  });
+
+  const dfBetween = k - 1;
+  const dfWithin = nTotal - k;
+  const msBetween = ssBetween / dfBetween;
+  const msWithin = ssWithin / dfWithin;
+
+  const f = msWithin === 0 ? 0 : msBetween / msWithin;
+  const pValue = 1 - jStat.centralF.cdf(f, dfBetween, dfWithin);
+
+  return { pValue, statistic: f, dfBetween, dfWithin, msBetween, msWithin };
+}
+
+export function calculateAndersonDarling(data: number[]) {
   // Simplified approximation for React UI speed. 
   // In a full node environment, a heavy AD library is preferred.
   // We use jStat's z-scores to approximate fitness.
   const n = data.length;
-  if (n < 7) return { pValue: 0.01 }; // Too small to prove normality
+  if (n < 7) return { pValue: 0.01, statistic: 0 }; // Too small to prove normality
   
   const mean = getMean(data);
   const stdev = getStdDev(data);
@@ -224,6 +314,163 @@ function calculateAndersonDarling(data: number[]) {
   else pValue = 1 - Math.exp(-13.436 + 101.14 * A2_adjusted - 223.73 * Math.pow(A2_adjusted, 2));
 
   return { statistic: A2_adjusted, pValue };
+}
+
+export function generateQQData(data: number[]) {
+  if (data.length < 2) return [];
+  const sorted = [...data].sort((a, b) => a - b);
+  const n = data.length;
+  const mean = getMean(data);
+  const stdev = getStdDev(data);
+
+  return sorted.map((val, i) => {
+    // Blom's plotting position: (i - 0.375) / (n + 0.25)
+    const p = (i + 1 - 0.375) / (n + 0.25);
+    const z = jStat.normal.inv(p, 0, 1);
+    const expected = mean + z * stdev;
+    return { x: expected, y: val };
+  });
+}
+
+export function getVarianceConfidenceInterval(data: number[], confidence = 0.95) {
+  const n = data.length;
+  if (n < 2) return { var: 0, lcl: 0, ucl: 0, sd: 0, sdLcl: 0, sdUcl: 0 };
+  const variance = Math.pow(getStdDev(data), 2);
+  const alpha = 1 - confidence;
+  const chi2Lower = jStat.chisquare.inv(alpha / 2, n - 1);
+  const chi2Upper = jStat.chisquare.inv(1 - alpha / 2, n - 1);
+  
+  const vLcl = ((n - 1) * variance) / chi2Upper;
+  const vUcl = ((n - 1) * variance) / chi2Lower;
+  
+  return {
+    var: variance,
+    lcl: vLcl,
+    ucl: vUcl,
+    sd: Math.sqrt(variance),
+    sdLcl: Math.sqrt(vLcl),
+    sdUcl: Math.sqrt(vUcl)
+  };
+}
+
+export function runFTest(data1: number[], data2: number[]) {
+  const v1 = Math.pow(getStdDev(data1), 2);
+  const v2 = Math.pow(getStdDev(data2), 2);
+  const df1 = data1.length - 1;
+  const df2 = data2.length - 1;
+
+  const f = v1 / v2;
+  // Two-tailed F-test
+  let pValue = 2 * (1 - jStat.centralF.cdf(Math.max(f, 1 / f), df1, df2));
+  if (pValue > 1) pValue = 1;
+
+  return { statistic: f, pValue, df1, df2 };
+}
+
+export function runLeveneTest(data1: number[], data2: number[]) {
+  const m1 = jStat.median(data1);
+  const m2 = jStat.median(data2);
+  
+  const z1 = data1.map(x => Math.abs(x - m1));
+  const z2 = data2.map(x => Math.abs(x - m2));
+  
+  // Levene's is essentially an ANOVA on absolute deviations from median
+  return runANOVA([z1, z2]);
+}
+
+export function runMannWhitneyU(data1: number[], data2: number[], alternative: string = 'neq') {
+  const n1 = data1.length;
+  const n2 = data2.length;
+  
+  const combined = [
+    ...data1.map(v => ({ v, g: 1 })),
+    ...data2.map(v => ({ v, g: 2 }))
+  ].sort((a, b) => a.v - b.v);
+
+  // Assign ranks
+  let i = 0;
+  while (i < combined.length) {
+    let j = i;
+    while (j < combined.length && combined[j].v === combined[i].v) {
+      j++;
+    }
+    const rank = (i + j + 1) / 2;
+    for (let k = i; k < j; k++) {
+      (combined[k] as any).rank = rank;
+    }
+    i = j;
+  }
+
+  const r1 = combined.filter(x => x.g === 1).reduce((acc, x) => acc + (x as any).rank, 0);
+  const u1 = r1 - (n1 * (n1 + 1)) / 2;
+  const u2 = n1 * n2 - u1;
+  
+  // For Mann-Whitney, U1 + U2 = n1*n2. 
+  // Standard test statistic is typically min(U1, U2) for two-tailed.
+  // For one-tailed:
+  // If H1: S1 > S2, we expect U2 to be large and U1 to be small (S1 ranks > S2 ranks)
+  // Wait, if S1 > S2, S1 has higher ranks, so R1 is larger. 
+  // U1 = R1 - n1(n1+1)/2. So U1 is larger if S1 > S2.
+  // U2 = n1*n2 - U1. So U2 is smaller if S1 > S2.
+  // Let's use the standard normal approximation.
+  const mU = (n1 * n2) / 2;
+  const sigmaU = Math.sqrt((n1 * n2 * (n1 + n2 + 1)) / 12);
+  
+  // Z for U1
+  const z = (u1 - mU) / sigmaU;
+  
+  let pValue: number;
+  if (alternative === 'greater') {
+    pValue = 1 - jStat.normal.cdf(z, 0, 1);
+  } else if (alternative === 'less') {
+    pValue = jStat.normal.cdf(z, 0, 1);
+  } else {
+    pValue = 2 * (1 - jStat.normal.cdf(Math.abs(z), 0, 1));
+  }
+
+  return { 
+    statistic: u1, 
+    pValue, 
+    u1, 
+    u2, 
+    n1, 
+    n2, 
+    z,
+    testName: 'Mann-Whitney U' 
+  };
+}
+
+export function getConfidenceInterval(data: number[], confidence = 0.95) {
+  const n = data.length;
+  if (n < 2) return { mean: 0, lcl: 0, ucl: 0 };
+  const mean = getMean(data);
+  const sd = getStdDev(data);
+  const se = sd / Math.sqrt(n);
+  const alpha = 1 - confidence;
+  const t = jStat.studentt.inv(1 - alpha / 2, n - 1);
+  return {
+    mean,
+    lcl: mean - t * se,
+    ucl: mean + t * se
+  };
+}
+
+export function getMedianConfidenceInterval(data: number[], confidence = 0.95) {
+  // Using Thompson-Savur (Non-parametric)
+  const n = data.length;
+  const sorted = [...data].sort((a,b) => a-b);
+  const median = jStat.median(sorted);
+  if (n < 5) return { median, lcl: sorted[0], ucl: sorted[n-1] };
+  
+  const z = jStat.normal.inv(1 - (1 - confidence) / 2, 0, 1);
+  const j = Math.floor(n/2 - z * Math.sqrt(n/4));
+  const k = Math.ceil(n/2 + 1 + z * Math.sqrt(n/4));
+  
+  return {
+    median,
+    lcl: sorted[Math.max(0, j - 1)],
+    ucl: sorted[Math.min(n - 1, k - 1)]
+  };
 }
 
 function checkStability(data: number[]): boolean {
