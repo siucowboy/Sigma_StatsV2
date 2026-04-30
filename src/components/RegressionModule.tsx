@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Line, ComposedChart, ReferenceLine } from 'recharts';
+import ExportWrapper from './ExportWrapper';
 
 export default function RegressionModule({ datasets }: { datasets: any[] }) {
   const [responseId, setResponseId] = useState('');
@@ -18,7 +19,7 @@ export default function RegressionModule({ datasets }: { datasets: any[] }) {
         <h2 className="text-2xl font-bold text-white">Regression Analysis</h2>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 items-start">
         {/* Predictor Selection */}
         <div className="col-span-1 space-y-4">
           <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
@@ -52,81 +53,91 @@ export default function RegressionModule({ datasets }: { datasets: any[] }) {
 
         {/* Output & Diagnostics */}
         <div className="col-span-1 lg:col-span-3 space-y-6">
-          <div className="bg-slate-800 p-6 rounded-lg border border-slate-700">
-            <h3 className="text-lg font-bold mb-4">Regression Equation</h3>
-            <div className="bg-slate-900 p-4 rounded border border-slate-700 text-center font-mono text-lg text-sky-400">
-              Y = 12.4501 + 2.3041(X₁) - 0.8420(X₂)
+          <ExportWrapper fileName="regression-metrics">
+            <div className="bg-slate-800 p-6 rounded-lg border border-slate-700">
+              <h3 className="text-lg font-bold mb-4">Regression Equation</h3>
+              <div className="bg-slate-900 p-4 rounded border border-slate-700 text-center font-mono text-lg text-sky-400">
+                Y = 12.4501 + 2.3041(X₁) - 0.8420(X₂)
+              </div>
+              
+              <div className="grid grid-cols-4 gap-4 mt-6">
+                <div className="text-center">
+                  <div className="text-xs text-slate-400 uppercase">R-Sq (Adj)</div>
+                  <div className="text-xl font-mono text-white">84.21%</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-xs text-slate-400 uppercase">R-Sq</div>
+                  <div className="text-xl font-mono text-white">85.04%</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-xs text-slate-400 uppercase">S (RMSE)</div>
+                  <div className="text-xl font-mono text-white">1.0425</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-xs text-slate-400 uppercase">P-Value</div>
+                  <div className="text-xl font-mono text-white">&lt; 0.0001</div>
+                </div>
+              </div>
             </div>
-            
-            <div className="grid grid-cols-4 gap-4 mt-6">
-              <div className="text-center">
-                <div className="text-xs text-slate-400 uppercase">R-Sq (Adj)</div>
-                <div className="text-xl font-mono text-white">84.21%</div>
-              </div>
-              <div className="text-center">
-                <div className="text-xs text-slate-400 uppercase">R-Sq</div>
-                <div className="text-xl font-mono text-white">85.04%</div>
-              </div>
-              <div className="text-center">
-                <div className="text-xs text-slate-400 uppercase">S (RMSE)</div>
-                <div className="text-xl font-mono text-white">1.0425</div>
-              </div>
-              <div className="text-center">
-                <div className="text-xs text-slate-400 uppercase">P-Value</div>
-                <div className="text-xl font-mono text-white">&lt; 0.0001</div>
-              </div>
-            </div>
-          </div>
+          </ExportWrapper>
 
           <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
             <h3 className="text-md font-bold mb-4">4-in-1 Residual Diagnostics</h3>
             <div className="grid grid-cols-2 gap-4 h-[400px]">
               
               {/* Normal Probability Plot */}
-              <div className="border border-slate-700 rounded p-2">
-                <div className="text-xs text-center text-slate-400 mb-1">Normal Probability Plot</div>
-                <ResponsiveContainer width="100%" height="90%">
-                  <ComposedChart data={residualData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                    <XAxis dataKey="res" type="number" hide />
-                    <YAxis dataKey="z" type="number" hide />
-                    <Scatter dataKey="z" fill="#38bdf8" />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
+              <ExportWrapper fileName="residuals-normal-plot">
+                <div className="border border-slate-700 rounded p-2 h-full">
+                  <div className="text-xs text-center text-slate-400 mb-1">Normal Probability Plot</div>
+                  <ResponsiveContainer width="100%" height="90%">
+                    <ComposedChart data={residualData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                      <XAxis dataKey="res" type="number" hide />
+                      <YAxis dataKey="z" type="number" hide />
+                      <Scatter dataKey="z" fill="#38bdf8" />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+              </ExportWrapper>
 
               {/* Versus Fits */}
-              <div className="border border-slate-700 rounded p-2">
-                <div className="text-xs text-center text-slate-400 mb-1">Versus Fits</div>
-                <ResponsiveContainer width="100%" height="90%">
-                  <ScatterChart>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                    <XAxis dataKey="fit" type="number" tick={{fontSize: 10}} />
-                    <YAxis dataKey="res" type="number" tick={{fontSize: 10}} />
-                    <ReferenceLine y={0} stroke="#ef4444" strokeDasharray="3 3" />
-                    <Scatter data={residualData} fill="#38bdf8" />
-                  </ScatterChart>
-                </ResponsiveContainer>
-              </div>
+              <ExportWrapper fileName="residuals-vs-fits">
+                <div className="border border-slate-700 rounded p-2 h-full">
+                  <div className="text-xs text-center text-slate-400 mb-1">Versus Fits</div>
+                  <ResponsiveContainer width="100%" height="90%">
+                    <ScatterChart>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                      <XAxis dataKey="fit" type="number" tick={{fontSize: 10}} />
+                      <YAxis dataKey="res" type="number" tick={{fontSize: 10}} />
+                      <ReferenceLine y={0} stroke="#ef4444" strokeDasharray="3 3" />
+                      <Scatter data={residualData} fill="#38bdf8" />
+                    </ScatterChart>
+                  </ResponsiveContainer>
+                </div>
+              </ExportWrapper>
               
               {/* Histogram */}
-              <div className="border border-slate-700 rounded p-2 flex items-center justify-center">
-                 <div className="text-slate-500 text-sm">Residual Histogram</div>
-              </div>
+              <ExportWrapper fileName="residuals-histogram">
+                <div className="border border-slate-700 rounded p-2 flex items-center justify-center h-full">
+                   <div className="text-slate-500 text-sm">Residual Histogram</div>
+                </div>
+              </ExportWrapper>
 
               {/* Versus Order */}
-              <div className="border border-slate-700 rounded p-2">
-                <div className="text-xs text-center text-slate-400 mb-1">Versus Order</div>
-                <ResponsiveContainer width="100%" height="90%">
-                  <ComposedChart data={residualData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                    <XAxis dataKey="order" type="number" tick={{fontSize: 10}} />
-                    <YAxis dataKey="res" type="number" tick={{fontSize: 10}} />
-                    <ReferenceLine y={0} stroke="#ef4444" strokeDasharray="3 3" />
-                    <Line type="step" dataKey="res" stroke="#94a3b8" strokeWidth={1} dot={<circle r={3} fill="#38bdf8" />} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
+              <ExportWrapper fileName="residuals-vs-order">
+                <div className="border border-slate-700 rounded p-2 h-full">
+                  <div className="text-xs text-center text-slate-400 mb-1">Versus Order</div>
+                  <ResponsiveContainer width="100%" height="90%">
+                    <ComposedChart data={residualData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                      <XAxis dataKey="order" type="number" tick={{fontSize: 10}} />
+                      <YAxis dataKey="res" type="number" tick={{fontSize: 10}} />
+                      <ReferenceLine y={0} stroke="#ef4444" strokeDasharray="3 3" />
+                      <Line type="step" dataKey="res" stroke="#94a3b8" strokeWidth={1} dot={<circle r={3} fill="#38bdf8" />} />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+              </ExportWrapper>
 
             </div>
           </div>

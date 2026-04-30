@@ -64,6 +64,8 @@ const DiagnosticIndicator = ({ label, passed, pValue }: { label: string, passed:
   </div>
 );
 
+import ExportWrapper from './ExportWrapper';
+
 export default function HypothesisModule({ datasets }: { datasets: any[] }) {
   const [activeTab, setActiveTab] = useState('1-sample');
   
@@ -341,7 +343,7 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
         ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 items-start">
         {/* Sidebar Config */}
         <div className="col-span-1 space-y-4">
           <div className="bg-slate-800 p-4 rounded-lg border border-slate-700 shadow-xl">
@@ -524,79 +526,85 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                 </div>
               ) : (
                 <div className="space-y-8">
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-center">
-                    <div className="bg-slate-900 p-4 rounded border border-slate-700">
-                      <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">Mean</div>
-                      <div className="text-2xl font-mono text-red-500 font-bold">{s1Results.mean.toFixed(3)}</div>
-                    </div>
-                    <div className="bg-slate-900 p-4 rounded border border-slate-700">
-                      <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">P-Value</div>
-                      <div className={`text-2xl font-mono font-bold ${s1Results.significant ? 'text-red-500' : 'text-green-500'}`}>
-                        {s1Results.pValue.toFixed(4)}
+                  <ExportWrapper fileName="1sample-summary">
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-center">
+                      <div className="bg-slate-900 p-4 rounded border border-slate-700">
+                        <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">Mean</div>
+                        <div className="text-2xl font-mono text-red-500 font-bold">{s1Results.mean.toFixed(3)}</div>
+                      </div>
+                      <div className="bg-slate-900 p-4 rounded border border-slate-700">
+                        <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">P-Value</div>
+                        <div className={`text-2xl font-mono font-bold ${s1Results.significant ? 'text-red-500' : 'text-green-500'}`}>
+                          {s1Results.pValue.toFixed(4)}
+                        </div>
+                      </div>
+                      <div className="bg-slate-900 p-4 rounded border border-slate-700">
+                        <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">T-Value</div>
+                        <div className="text-2xl font-mono text-slate-200">{s1Results.statistic.toFixed(3)}</div>
+                      </div>
+                      <div className="bg-slate-900 p-4 rounded border border-slate-700">
+                        <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">Decision</div>
+                        <div className={`text-xs mt-2 font-bold ${s1Results.significant ? 'text-red-400' : 'text-green-400'}`}>
+                          {s1Results.significant ? 'REJECT NULL' : 'FAIL TO REJECT'}
+                        </div>
                       </div>
                     </div>
-                    <div className="bg-slate-900 p-4 rounded border border-slate-700">
-                      <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">T-Value</div>
-                      <div className="text-2xl font-mono text-slate-200">{s1Results.statistic.toFixed(3)}</div>
-                    </div>
-                    <div className="bg-slate-900 p-4 rounded border border-slate-700">
-                      <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">Decision</div>
-                      <div className={`text-xs mt-2 font-bold ${s1Results.significant ? 'text-red-400' : 'text-green-400'}`}>
-                        {s1Results.significant ? 'REJECT NULL' : 'FAIL TO REJECT'}
-                      </div>
-                    </div>
-                  </div>
+                  </ExportWrapper>
                   
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                    <div className="bg-slate-900 p-4 rounded border border-slate-700">
-                      <h4 className="text-xs font-bold text-slate-500 uppercase mb-4 text-center tracking-widest">Distribution Boxplot</h4>
-                      <div className="h-48 overflow-hidden">
-                        <Plot
-                          data={[
-                            {
-                              x: s1Results.data.map(v => Number(v)).filter(v => !isNaN(v)),
-                              type: 'box',
-                              name: 'Sample',
-                              marker: { color: '#38bdf8' },
-                              boxpoints: 'outliers',
-                              orientation: 'h'
-                            }
-                          ]}
-                          layout={{
-                            autosize: true,
-                            showlegend: false,
-                            margin: { l: 40, r: 20, t: 10, b: 30 },
-                            paper_bgcolor: 'transparent',
-                            plot_bgcolor: 'transparent',
-                            font: { color: '#94a3b8' },
-                            xaxis: {
-                              gridcolor: '#334155',
-                              zerolinecolor: '#475569',
-                              tickfont: { color: '#94a3b8', size: 10 }
-                            },
-                            yaxis: {
-                              showticklabels: false,
-                              gridcolor: 'transparent'
-                            }
-                          }}
-                          style={{ width: '100%', height: '100%' }}
-                          config={{ displayModeBar: false, responsive: true }}
-                        />
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
+                    <ExportWrapper fileName="1sample-boxplot">
+                      <div className="bg-slate-900 p-4 rounded border border-slate-700 h-full relative" onContextMenu={(e) => e.stopPropagation()}>
+                        <h4 className="text-xs font-bold text-slate-500 uppercase mb-4 text-center tracking-widest pointer-events-none">Distribution Boxplot</h4>
+                        <div className="h-40 overflow-hidden relative z-0">
+                          <Plot
+                            data={[
+                              {
+                                x: s1Results.data.map(v => Number(v)).filter(v => !isNaN(v)),
+                                type: 'box',
+                                name: 'Sample',
+                                marker: { color: '#38bdf8' },
+                                boxpoints: 'outliers',
+                                orientation: 'h'
+                              }
+                            ]}
+                            layout={{
+                              autosize: true,
+                              showlegend: false,
+                              margin: { l: 40, r: 20, t: 10, b: 30 },
+                              paper_bgcolor: 'transparent',
+                              plot_bgcolor: 'transparent',
+                              font: { color: '#94a3b8' },
+                              xaxis: {
+                                gridcolor: '#334155',
+                                zerolinecolor: '#475569',
+                                tickfont: { color: '#94a3b8', size: 10 }
+                              },
+                              yaxis: {
+                                showticklabels: false,
+                                gridcolor: 'transparent'
+                              }
+                            }}
+                            style={{ width: '100%', height: '100%' }}
+                            config={{ displayModeBar: false, responsive: true, staticPlot: false }}
+                          />
+                        </div>
                       </div>
-                    </div>
+                    </ExportWrapper>
 
-                     <div className="bg-slate-900 p-4 rounded border border-slate-700 flex flex-col justify-center">
-                        <p className="text-sm text-slate-200 leading-relaxed italic border-l-4 border-sky-600 pl-4 py-2">
-                         "With a P-Value of {s1Results.pValue.toFixed(4)}, we {s1Results.significant ? 'have' : 'do not have'} sufficient evidence to suggest the population mean is {s1Alt === 'neq' ? 'different from' : s1Alt === 'greater' ? 'greater than' : 'less than'} {s1Target}."
-                       </p>
-                      <div className="mt-4 grid grid-cols-2 gap-2 text-[10px] text-slate-500 font-mono">
-                         <div className="bg-slate-800/50 p-2 rounded">N: {s1Results.n}</div>
-                         <div className="bg-slate-800/50 p-2 rounded">StDev: {s1Results.sd.toFixed(3)}</div>
-                         <div className="bg-slate-800/50 p-2 rounded">Target: {s1Target}</div>
-                         <div className="bg-slate-900/50 p-2 rounded">{(1 - alpha).toFixed(2)} CI: [{s1Results.ci.lcl.toFixed(2)}, {s1Results.ci.ucl.toFixed(2)}]</div>
-                         <div className="bg-slate-800/50 p-2 rounded">DF: {s1Results.df}</div>
+                    <ExportWrapper fileName="1sample-conclusion">
+                      <div className="bg-slate-900 p-4 rounded border border-slate-700 flex flex-col justify-center h-full">
+                        <p className="text-xs text-slate-200 leading-relaxed italic border-l-4 border-sky-600 pl-4 py-2">
+                          "With a P-Value of {s1Results.pValue.toFixed(4)}, we {s1Results.significant ? 'have' : 'do not have'} sufficient evidence to suggest the population mean is {s1Alt === 'neq' ? 'different from' : s1Alt === 'greater' ? 'greater than' : 'less than'} {s1Target}."
+                        </p>
+                        <div className="mt-4 grid grid-cols-2 gap-2 text-[10px] text-slate-500 font-mono">
+                           <div className="bg-slate-800/50 p-2 rounded">N: {s1Results.n}</div>
+                           <div className="bg-slate-800/50 p-2 rounded">StDev: {s1Results.sd.toFixed(3)}</div>
+                           <div className="bg-slate-800/50 p-2 rounded">Target: {s1Target}</div>
+                           <div className="bg-slate-900/50 p-2 rounded">{(1 - alpha).toFixed(2)} CI: [{s1Results.ci.lcl.toFixed(2)}, {s1Results.ci.ucl.toFixed(2)}]</div>
+                           <div className="bg-slate-800/50 p-2 rounded">DF: {s1Results.df}</div>
+                        </div>
                       </div>
-                    </div>
+                    </ExportWrapper>
                   </div>
                 </div>
               )}
@@ -604,294 +612,293 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
           )}
 
           {activeTab === '2-sample' && (
-            <>
-              {/* Diagnostics Row */}
-              {s2Analysis && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
-                    <h4 className="text-sm font-bold text-slate-400 mb-3 flex items-center gap-2 uppercase tracking-tight">
-                      <Activity size={14} className="text-emerald-400" /> Assumptions: Normality (Anderson-Darling)
-                    </h4>
-                    <div className="space-y-2 mb-4">
-                      <DiagnosticIndicator label={s2Analysis.name1} passed={s2Analysis.norm1.pValue > 0.05} pValue={s2Analysis.norm1.pValue} />
-                      <DiagnosticIndicator label={s2Analysis.name2} passed={s2Analysis.norm2.pValue > 0.05} pValue={s2Analysis.norm2.pValue} />
-                    </div>
-                    <div className="h-48">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <ScatterChart margin={{ top: 10, right: 30, bottom: 20, left: 10 }}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
-                          <XAxis 
-                            type="number" 
-                            dataKey="x" 
-                            name="Expected" 
-                            stroke="#94a3b8" 
-                            fontSize={10} 
-                            domain={['dataMin - 0.5', 'dataMax + 0.5']} 
-                            label={{ value: 'Expected Normal', position: 'bottom', fill: '#64748b', fontSize: 10 }} 
-                          />
-                          <YAxis 
-                            type="number" 
-                            dataKey="y" 
-                            name="Observed" 
-                            stroke="#94a3b8" 
-                            fontSize={10} 
-                            domain={['dataMin - 0.5', 'dataMax + 0.5']} 
-                          />
-                          <Tooltip cursor={{ strokeDasharray: '3 3' }} contentStyle={{ backgroundColor: '#0f172a' }} />
-                          <ReferenceLine x={0} y={0} segment={[{x: -4, y: -4}, {x: 4, y: 4}]} stroke="#475569" strokeDasharray="3 3" />
-                          <Scatter name={s2Analysis.name1} data={s2Analysis.qq1} fill="#38bdf8" shape="circle" />
-                          <Scatter name={s2Analysis.name2} data={s2Analysis.qq2} fill="#fbbf24" shape="square" />
-                          <Legend verticalAlign="top" height={36} iconType="circle" />
-                        </ScatterChart>
-                      </ResponsiveContainer>
-                    </div>
-                  </div>
-
-                  <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
-                    <h4 className="text-sm font-bold text-slate-400 mb-3 flex items-center gap-2 uppercase tracking-tight">
-                      <TrendingUp size={14} className="text-amber-400" /> Variance Equality ({s2Analysis.varTestType})
-                    </h4>
-                    <div className="mb-4">
-                      <DiagnosticIndicator label="Homogeneity" passed={s2Analysis.equalVar} pValue={s2Analysis.varTest.pValue} />
-                    </div>
-                    <div className="h-48">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <ComposedChart layout="vertical" data={s2Analysis.varCiData} margin={{ top: 20, right: 30, bottom: 20, left: 40 }}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />
-                          <XAxis type="number" domain={['auto', 'auto']} stroke="#94a3b8" fontSize={10} />
-                          <YAxis type="category" dataKey="name" stroke="#94a3b8" fontSize={10} />
-                          <Tooltip />
-                          {/* Range Bar */}
-                          <Bar dataKey="range" fill="#38bdf8" barSize={4} fillOpacity={0.6}>
-                            {s2Analysis.varCiData.map((entry: any, index: number) => (
-                              <Cell key={index} fill={index === 0 ? '#38bdf8' : '#fbbf24'} />
-                            ))}
-                          </Bar>
-                          {/* Point Estimate */}
-                          <Scatter dataKey="mean" fill="#fff">
-                            {s2Analysis.varCiData.map((entry: any, index: number) => (
-                              <Cell key={index} fill={index === 0 ? '#38bdf8' : '#fbbf24'} stroke="#fff" strokeWidth={2} />
-                            ))}
-                          </Scatter>
-                        </ComposedChart>
-                      </ResponsiveContainer>
-                      <p className="text-[10px] text-slate-500 text-center italic mt-2">Standard Deviation {(1 - alpha).toFixed(2)} Confidence Intervals</p>
-                    </div>
-                  </div>
+            <div className="bg-slate-800 p-6 rounded-lg border border-slate-700 shadow-xl space-y-8">
+              <h3 className="text-xl font-bold">2-Sample Analysis Results</h3>
+              
+              {!s2Analysis ? (
+                <div className="h-64 flex items-center justify-center border border-dashed border-slate-700 rounded text-slate-500 italic">
+                  Complete settings and click Run Analysis.
                 </div>
-              )}
+              ) : (
+                <div className="space-y-8">
+                  {/* Diagnostics Row */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <ExportWrapper fileName="2sample-normality">
+                      <div className="bg-slate-900/40 p-4 rounded-lg border border-slate-700/50">
+                        <h4 className="text-xs font-bold text-slate-500 mb-3 flex items-center gap-2 uppercase tracking-tight">
+                          <Activity size={14} className="text-emerald-400" /> Normality Check
+                        </h4>
+                        <div className="space-y-2 mb-4">
+                          <DiagnosticIndicator label={s2Analysis.name1} passed={s2Analysis.norm1.pValue > 0.05} pValue={s2Analysis.norm1.pValue} />
+                          <DiagnosticIndicator label={s2Analysis.name2} passed={s2Analysis.norm2.pValue > 0.05} pValue={s2Analysis.norm2.pValue} />
+                        </div>
+                        <div className="h-40">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <ScatterChart margin={{ top: 10, right: 30, bottom: 20, left: 10 }}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
+                              <XAxis 
+                                type="number" 
+                                dataKey="x" 
+                                stroke="#94a3b8" 
+                                fontSize={8} 
+                                domain={['dataMin - 0.5', 'dataMax + 0.5']} 
+                              />
+                              <YAxis 
+                                type="number" 
+                                dataKey="y" 
+                                stroke="#94a3b8" 
+                                fontSize={8} 
+                                domain={['dataMin - 0.5', 'dataMax + 0.5']} 
+                              />
+                              <Tooltip cursor={{ strokeDasharray: '3 3' }} contentStyle={{ backgroundColor: '#0f172a' }} />
+                              <ReferenceLine x={0} y={0} segment={[{x: -4, y: -4}, {x: 4, y: 4}]} stroke="#475569" strokeDasharray="3 3" />
+                              <Scatter name={s2Analysis.name1} data={s2Analysis.qq1} fill="#38bdf8" shape="circle" />
+                              <Scatter name={s2Analysis.name2} data={s2Analysis.qq2} fill="#fbbf24" shape="square" />
+                            </ScatterChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+                    </ExportWrapper>
 
-                {/* Main Test Results Panel */}
-              <div className="bg-slate-800 p-6 rounded-lg border border-slate-700 shadow-xl space-y-8">
-                {!s2Analysis ? (
-                  <div className="h-64 flex items-center justify-center border border-dashed border-slate-700 rounded text-slate-500 italic">
-                    Select datasets and alternative hypothesis to analyze.
+                    <ExportWrapper fileName="2sample-variance">
+                      <div className="bg-slate-900/40 p-4 rounded-lg border border-slate-700/50">
+                        <h4 className="text-xs font-bold text-slate-500 mb-3 flex items-center gap-2 uppercase tracking-tight">
+                          <TrendingUp size={14} className="text-amber-400" /> Variance Equality
+                        </h4>
+                        <div className="mb-4">
+                          <DiagnosticIndicator label="Homogeneity" passed={s2Analysis.equalVar} pValue={s2Analysis.varTest.pValue} />
+                        </div>
+                        <div className="h-40">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <ComposedChart layout="vertical" data={s2Analysis.varCiData} margin={{ top: 20, right: 30, bottom: 20, left: 40 }}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />
+                              <XAxis type="number" domain={['auto', 'auto']} stroke="#94a3b8" fontSize={8} />
+                              <YAxis type="category" dataKey="name" stroke="#94a3b8" fontSize={8} />
+                              <Bar dataKey="range" fill="#38bdf8" barSize={4} fillOpacity={0.6}>
+                                {s2Analysis.varCiData.map((entry: any, index: number) => (
+                                  <Cell key={index} fill={index === 0 ? '#38bdf8' : '#fbbf24'} />
+                                ))}
+                              </Bar>
+                              <Scatter dataKey="mean" fill="#fff">
+                                {s2Analysis.varCiData.map((entry: any, index: number) => (
+                                  <Cell key={index} fill={index === 0 ? '#38bdf8' : '#fbbf24'} stroke="#fff" strokeWidth={2} />
+                                ))}
+                              </Scatter>
+                            </ComposedChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+                    </ExportWrapper>
                   </div>
-                ) : (
-                  <>
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 pt-8 border-t border-slate-700/50 items-start">
                       {/* Left: Stats Tables */}
                       <div className="space-y-8">
-                        {/* Check of Equal Variance */}
-                        <div>
-                          <h4 className="text-xs font-bold text-sky-400 uppercase mb-3 flex items-center gap-2">
-                            Check of Equal Variance
-                          </h4>
-                          <div className="overflow-x-auto">
-                            <table className="w-full text-xs text-left border-collapse">
-                              <thead>
-                                <tr className="border-b border-slate-700">
-                                  <th className="py-2 text-slate-500 uppercase font-bold">Sample</th>
-                                  <th className="py-2 text-slate-300 font-mono text-center">N</th>
-                                  <th className="py-2 text-slate-300 font-mono text-center">StDev</th>
-                                  <th className="py-2 text-slate-300 font-mono text-center">Variance</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                <tr className="border-b border-slate-800/50">
-                                  <td className="py-2 text-slate-300 font-medium">{s2Analysis.name1}</td>
-                                  <td className="py-2 text-center text-red-500 font-mono font-bold">{s2Analysis.stats.n1}</td>
-                                  <td className="py-2 text-center text-red-500 font-mono font-bold">{s2Analysis.stats.s1.toFixed(3)}</td>
-                                  <td className="py-2 text-center text-red-500 font-mono font-bold">{s2Analysis.stats.v1.toFixed(3)}</td>
-                                </tr>
-                                <tr className="border-b border-slate-800/50">
-                                  <td className="py-2 text-slate-300 font-medium">{s2Analysis.name2}</td>
-                                  <td className="py-2 text-center text-red-500 font-mono font-bold">{s2Analysis.stats.n2}</td>
-                                  <td className="py-2 text-center text-red-500 font-mono font-bold">{s2Analysis.stats.s2.toFixed(3)}</td>
-                                  <td className="py-2 text-center text-red-500 font-mono font-bold">{s2Analysis.stats.v2.toFixed(3)}</td>
-                                </tr>
-                              </tbody>
-                            </table>
-                          </div>
-                          
-                          <div className="mt-4 flex flex-col gap-2">
-                             <div className="flex justify-between items-center text-[10px] bg-slate-900/50 p-2 rounded">
-                                <span className="text-slate-500 uppercase font-bold">Ratio of Std Dev's</span>
-                                <span className="text-red-500 font-mono font-bold text-sm">{(s2Analysis.stats.s1 / s2Analysis.stats.s2).toFixed(3)}</span>
-                             </div>
-                             <div className="flex justify-between items-center text-[10px] bg-slate-900/50 p-2 rounded">
-                                <span className="text-slate-500 uppercase font-bold">Ratio of Variances</span>
-                                <span className="text-red-500 font-mono font-bold text-sm">{(s2Analysis.stats.v1 / s2Analysis.stats.v2).toFixed(3)}</span>
-                             </div>
-                             <div className="flex justify-between items-center text-[10px] bg-slate-900/50 p-2 rounded border border-slate-700/50">
-                                <span className="text-slate-500 uppercase font-bold">{s2Analysis.varTestType} P-Value</span>
-                                <span className={`font-mono font-bold text-sm ${s2Analysis.varTest.pValue < alpha ? 'text-red-500' : 'text-green-500'}`}>
-                                  {s2Analysis.varTest.pValue.toFixed(3)}
-                                </span>
-                             </div>
-                          </div>
+                        <ExportWrapper fileName="2sample-variances-table">
+                          <div className="bg-slate-900/50 p-4 rounded border border-slate-700">
+                            <h4 className="text-xs font-bold text-sky-400 uppercase mb-3 flex items-center gap-2">
+                              Check of Equal Variance
+                            </h4>
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-xs text-left border-collapse">
+                                <thead>
+                                  <tr className="border-b border-slate-700">
+                                    <th className="py-2 text-slate-500 uppercase font-bold">Sample</th>
+                                    <th className="py-2 text-slate-300 font-mono text-center">N</th>
+                                    <th className="py-2 text-slate-300 font-mono text-center">StDev</th>
+                                    <th className="py-2 text-slate-300 font-mono text-center">Variance</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  <tr className="border-b border-slate-800/50">
+                                    <td className="py-2 text-slate-300 font-medium">{s2Analysis.name1}</td>
+                                    <td className="py-2 text-center text-red-500 font-mono font-bold">{s2Analysis.stats.n1}</td>
+                                    <td className="py-2 text-center text-red-500 font-mono font-bold">{s2Analysis.stats.s1.toFixed(3)}</td>
+                                    <td className="py-2 text-center text-red-500 font-mono font-bold">{s2Analysis.stats.v1.toFixed(3)}</td>
+                                  </tr>
+                                  <tr className="border-b border-slate-800/50">
+                                    <td className="py-2 text-slate-300 font-medium">{s2Analysis.name2}</td>
+                                    <td className="py-2 text-center text-red-500 font-mono font-bold">{s2Analysis.stats.n2}</td>
+                                    <td className="py-2 text-center text-red-500 font-mono font-bold">{s2Analysis.stats.s2.toFixed(3)}</td>
+                                    <td className="py-2 text-center text-red-500 font-mono font-bold">{s2Analysis.stats.v2.toFixed(3)}</td>
+                                  </tr>
+                                </tbody>
+                              </table>
+                            </div>
+                            
+                            <div className="mt-4 flex flex-col gap-2">
+                              <div className="flex justify-between items-center text-[10px] bg-slate-900/50 p-2 rounded">
+                                  <span className="text-slate-500 uppercase font-bold">Ratio of Std Dev's</span>
+                                  <span className="text-red-500 font-mono font-bold text-sm">{(s2Analysis.stats.s1 / s2Analysis.stats.s2).toFixed(3)}</span>
+                              </div>
+                              <div className="flex justify-between items-center text-[10px] bg-slate-900/50 p-2 rounded">
+                                  <span className="text-slate-500 uppercase font-bold">Ratio of Variances</span>
+                                  <span className="text-red-500 font-mono font-bold text-sm">{(s2Analysis.stats.v1 / s2Analysis.stats.v2).toFixed(3)}</span>
+                              </div>
+                              <div className="flex justify-between items-center text-[10px] bg-slate-900/50 p-2 rounded border border-slate-700/50">
+                                  <span className="text-slate-500 uppercase font-bold">{s2Analysis.varTestType} P-Value</span>
+                                  <span className={`font-mono font-bold text-sm ${s2Analysis.varTest.pValue < alpha ? 'text-red-500' : 'text-green-500'}`}>
+                                    {s2Analysis.varTest.pValue.toFixed(3)}
+                                  </span>
+                              </div>
+                            </div>
 
-                          <div className="mt-4 bg-slate-900/80 p-3 rounded border border-slate-700">
-                             <p className="text-[10px] text-slate-500 uppercase font-bold mb-1">Recommendation</p>
-                             <p className={`text-xs font-bold ${s2Analysis.equalVar ? 'text-green-400' : 'text-amber-400'}`}>
-                               Recommend {s2Analysis.equalVar ? 'USING' : 'NOT USING'} Assumption of Equal Variance
-                             </p>
+                            <div className="mt-4 bg-slate-900/80 p-3 rounded border border-slate-700">
+                              <p className="text-[10px] text-slate-500 uppercase font-bold mb-1">Recommendation</p>
+                              <p className={`text-xs font-bold ${s2Analysis.equalVar ? 'text-green-400' : 'text-amber-400'}`}>
+                                Recommend {s2Analysis.equalVar ? 'USING' : 'NOT USING'} Assumption of Equal Variance
+                              </p>
+                            </div>
                           </div>
-                        </div>
+                        </ExportWrapper>
 
-                        {/* T-Test Results Table */}
-                        <div className="pt-6 border-t border-slate-700">
-                          <h4 className="text-xs font-bold text-sky-400 uppercase mb-3 flex items-center gap-2">
-                            {s2Analysis.testType} Results
-                          </h4>
-                          <div className="overflow-x-auto">
-                            <table className="w-full text-xs text-left border-collapse">
-                              <thead>
-                                <tr className="border-b border-slate-700">
-                                  <th className="py-2 text-slate-500 uppercase font-bold">Sample</th>
-                                  <th className="py-2 text-slate-300 font-mono text-center">N</th>
-                                  <th className="py-2 text-slate-300 font-mono text-center">Mean/Med</th>
-                                  <th className="py-2 text-slate-300 font-mono text-center">StDev</th>
-                                  <th className="py-2 text-slate-300 font-mono text-center">SE Mean</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                <tr className="border-b border-slate-800/50">
-                                  <td className="py-2 text-slate-300 font-medium">{s2Analysis.name1}</td>
-                                  <td className="py-2 text-center text-red-500 font-mono font-bold">{s2Analysis.stats.n1}</td>
-                                  <td className="py-2 text-center text-red-500 font-mono font-bold">{(s2Analysis.ci.type === 'Medians' ? s2Analysis.stats.med1 : s2Analysis.stats.m1).toFixed(3)}</td>
-                                  <td className="py-2 text-center text-red-500 font-mono font-bold">{s2Analysis.stats.s1.toFixed(3)}</td>
-                                  <td className="py-2 text-center text-red-500 font-mono font-bold">{(s2Analysis.stats.s1 / Math.sqrt(s2Analysis.stats.n1)).toFixed(3)}</td>
-                                </tr>
-                                <tr className="border-b border-slate-800/50">
-                                  <td className="py-2 text-slate-300 font-medium">{s2Analysis.name2}</td>
-                                  <td className="py-2 text-center text-red-500 font-mono font-bold">{s2Analysis.stats.n2}</td>
-                                  <td className="py-2 text-center text-red-500 font-mono font-bold">{(s2Analysis.ci.type === 'Medians' ? s2Analysis.stats.med2 : s2Analysis.stats.m2).toFixed(3)}</td>
-                                  <td className="py-2 text-center text-red-500 font-mono font-bold">{s2Analysis.stats.s2.toFixed(3)}</td>
-                                  <td className="py-2 text-center text-red-500 font-mono font-bold">{(s2Analysis.stats.s2 / Math.sqrt(s2Analysis.stats.n2)).toFixed(3)}</td>
-                                </tr>
-                              </tbody>
-                            </table>
-                          </div>
+                        <ExportWrapper fileName="2sample-test-results">
+                          <div className="pt-6 border-t border-slate-700">
+                            <h4 className="text-xs font-bold text-sky-400 uppercase mb-3 flex items-center gap-2">
+                              {s2Analysis.testType} Results
+                            </h4>
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-xs text-left border-collapse">
+                                <thead>
+                                  <tr className="border-b border-slate-700">
+                                    <th className="py-2 text-slate-500 uppercase font-bold">Sample</th>
+                                    <th className="py-2 text-slate-300 font-mono text-center">N</th>
+                                    <th className="py-2 text-slate-300 font-mono text-center">Mean/Med</th>
+                                    <th className="py-2 text-slate-300 font-mono text-center">StDev</th>
+                                    <th className="py-2 text-slate-300 font-mono text-center">SE Mean</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  <tr className="border-b border-slate-800/50">
+                                    <td className="py-2 text-slate-300 font-medium">{s2Analysis.name1}</td>
+                                    <td className="py-2 text-center text-red-500 font-mono font-bold">{s2Analysis.stats.n1}</td>
+                                    <td className="py-2 text-center text-red-500 font-mono font-bold">{(s2Analysis.ci.type === 'Medians' ? s2Analysis.stats.med1 : s2Analysis.stats.m1).toFixed(3)}</td>
+                                    <td className="py-2 text-center text-red-500 font-mono font-bold">{s2Analysis.stats.s1.toFixed(3)}</td>
+                                    <td className="py-2 text-center text-red-500 font-mono font-bold">{(s2Analysis.stats.s1 / Math.sqrt(s2Analysis.stats.n1)).toFixed(3)}</td>
+                                  </tr>
+                                  <tr className="border-b border-slate-800/50">
+                                    <td className="py-2 text-slate-300 font-medium">{s2Analysis.name2}</td>
+                                    <td className="py-2 text-center text-red-500 font-mono font-bold">{s2Analysis.stats.n2}</td>
+                                    <td className="py-2 text-center text-red-500 font-mono font-bold">{(s2Analysis.ci.type === 'Medians' ? s2Analysis.stats.med2 : s2Analysis.stats.m2).toFixed(3)}</td>
+                                    <td className="py-2 text-center text-red-500 font-mono font-bold">{s2Analysis.stats.s2.toFixed(3)}</td>
+                                    <td className="py-2 text-center text-red-500 font-mono font-bold">{(s2Analysis.stats.s2 / Math.sqrt(s2Analysis.stats.n2)).toFixed(3)}</td>
+                                  </tr>
+                                </tbody>
+                              </table>
+                            </div>
 
-                          <div className="mt-6 grid grid-cols-2 gap-4">
-                             <div className="bg-slate-900/50 p-3 rounded border border-slate-700">
-                                <p className="text-[10px] text-slate-500 uppercase font-bold mb-1">Estimate for difference</p>
-                                <p className="text-xl font-mono font-bold text-red-500">
-                                  {(s2Analysis.stats.m1 - s2Analysis.stats.m2).toFixed(3)}
-                                </p>
-                             </div>
-                             <div className="bg-slate-900/50 p-3 rounded border border-slate-700 text-right">
-                                <p className="text-[10px] text-slate-500 uppercase font-bold mb-1">P-Value</p>
-                                <p className={`text-xl font-mono font-bold ${s2Analysis.significant ? 'text-red-500' : 'text-slate-200'}`}>
-                                  {s2Analysis.results.pValue.toFixed(3)}
-                                </p>
-                             </div>
-                             <div className="bg-slate-900/50 p-3 rounded border border-slate-700">
-                                <p className="text-[10px] text-slate-500 uppercase font-bold mb-1">{(1 - alpha).toFixed(2)} CI for Difference</p>
-                                <p className="text-xs font-mono font-bold text-red-500">
-                                  [{s2Analysis.ci.data[0].lcl.toFixed(3)} to {s2Analysis.ci.data[0].ucl.toFixed(3)}]
-                                </p>
-                                <p className="text-[8px] text-slate-600 italic leading-tight mt-1">*approx derived from individual CIs</p>
-                             </div>
-                             <div className="bg-slate-900/50 p-3 rounded border border-slate-700 text-right">
-                                <p className="text-[10px] text-slate-500 uppercase font-bold mb-1">{s2Analysis.ci.type === 'Medians' ? 'U-Statistic' : 'T-Value'}</p>
-                                <p className="text-sm font-mono font-bold text-slate-300">
-                                  {s2Analysis.results.statistic.toFixed(3)}
-                                </p>
-                             </div>
+                            <div className="mt-6 grid grid-cols-2 gap-4">
+                              <div className="bg-slate-900/50 p-3 rounded border border-slate-700">
+                                  <p className="text-[10px] text-slate-500 uppercase font-bold mb-1">Estimate for difference</p>
+                                  <p className="text-xl font-mono font-bold text-red-500">
+                                    {(s2Analysis.stats.m1 - s2Analysis.stats.m2).toFixed(3)}
+                                  </p>
+                              </div>
+                              <div className="bg-slate-900/50 p-3 rounded border border-slate-700 text-right">
+                                  <p className="text-[10px] text-slate-500 uppercase font-bold mb-1">P-Value</p>
+                                  <p className={`text-xl font-mono font-bold ${s2Analysis.significant ? 'text-red-500' : 'text-slate-200'}`}>
+                                    {s2Analysis.results.pValue.toFixed(3)}
+                                  </p>
+                              </div>
+                              <div className="bg-slate-900/50 p-3 rounded border border-slate-700">
+                                  <p className="text-[10px] text-slate-500 uppercase font-bold mb-1">{(1 - alpha).toFixed(2)} CI for Difference</p>
+                                  <p className="text-xs font-mono font-bold text-red-500">
+                                    [{s2Analysis.ci.data[0].lcl.toFixed(3)} to {s2Analysis.ci.data[0].ucl.toFixed(3)}]
+                                  </p>
+                                  <p className="text-[8px] text-slate-600 italic leading-tight mt-1">*approx derived from individual CIs</p>
+                              </div>
+                              <div className="bg-slate-900/50 p-3 rounded border border-slate-700 text-right">
+                                  <p className="text-[10px] text-slate-500 uppercase font-bold mb-1">{s2Analysis.ci.type === 'Medians' ? 'U-Statistic' : 'T-Value'}</p>
+                                  <p className="text-sm font-mono font-bold text-slate-300">
+                                    {s2Analysis.results.statistic.toFixed(3)}
+                                  </p>
+                              </div>
+                            </div>
                           </div>
-                        </div>
+                        </ExportWrapper>
                       </div>
 
                       {/* Right: Main Diagnostic Plots */}
                       <div className="space-y-6">
-                        <div className="bg-slate-900 p-4 rounded border border-slate-700">
-                          <h4 className="text-xs font-bold text-slate-500 uppercase mb-4 text-center tracking-widest">Plot of {s2Analysis.ci.type} Confidence Intervals</h4>
-                          <div className="h-64">
-                            <ResponsiveContainer width="100%" height="100%">
-                              <ComposedChart layout="vertical" data={s2Analysis.ci.data} margin={{ top: 20, right: 30, bottom: 40, left: 40 }}>
-                                <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />
-                                <XAxis type="number" domain={['auto', 'auto']} stroke="#94a3b8" fontSize={10} />
-                                <YAxis type="category" dataKey="name" stroke="#94a3b8" fontSize={10} />
-                                <Tooltip />
-                                <Bar dataKey="range" fill="#38bdf8" barSize={4} fillOpacity={0.6}>
-                                  {s2Analysis.ci.data.map((entry: any, index: number) => (
-                                    <Cell key={index} fill={index === 0 ? '#38bdf8' : '#fbbf24'} />
-                                  ))}
-                                </Bar>
-                                <Scatter dataKey="mean" fill="#fff">
-                                  {s2Analysis.ci.data.map((entry: any, index: number) => (
-                                    <Cell key={index} fill={index === 0 ? '#38bdf8' : '#fbbf24'} stroke="#fff" strokeWidth={2} />
-                                  ))}
-                                </Scatter>
-                              </ComposedChart>
-                            </ResponsiveContainer>
-                            <p className="text-[8px] text-slate-500 text-center uppercase tracking-tighter mt-2">Sample</p>
+                        <ExportWrapper fileName="2sample-ci-plot">
+                          <div className="bg-slate-900 p-4 rounded border border-slate-700">
+                            <h4 className="text-xs font-bold text-slate-500 uppercase mb-4 text-center tracking-widest">Plot of {s2Analysis.ci.type} Confidence Intervals</h4>
+                            <div className="h-64">
+                              <ResponsiveContainer width="100%" height="100%">
+                                <ComposedChart layout="vertical" data={s2Analysis.ci.data} margin={{ top: 20, right: 30, bottom: 40, left: 40 }}>
+                                  <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />
+                                  <XAxis type="number" domain={['auto', 'auto']} stroke="#94a3b8" fontSize={10} />
+                                  <YAxis type="category" dataKey="name" stroke="#94a3b8" fontSize={10} />
+                                  <Tooltip />
+                                  <Bar dataKey="range" fill="#38bdf8" barSize={4} fillOpacity={0.6}>
+                                    {s2Analysis.ci.data.map((entry: any, index: number) => (
+                                      <Cell key={index} fill={index === 0 ? '#38bdf8' : '#fbbf24'} />
+                                    ))}
+                                  </Bar>
+                                  <Scatter dataKey="mean" fill="#fff">
+                                    {s2Analysis.ci.data.map((entry: any, index: number) => (
+                                      <Cell key={index} fill={index === 0 ? '#38bdf8' : '#fbbf24'} stroke="#fff" strokeWidth={2} />
+                                    ))}
+                                  </Scatter>
+                                </ComposedChart>
+                              </ResponsiveContainer>
+                              <p className="text-[8px] text-slate-500 text-center uppercase tracking-tighter mt-2">Sample</p>
+                            </div>
                           </div>
-                        </div>
+                        </ExportWrapper>
 
-                        <div className="bg-slate-900 p-4 rounded border border-slate-700">
-                          <h4 className="text-xs font-bold text-slate-500 uppercase mb-4 text-center tracking-widest">Distribution Boxplot</h4>
-                          <div className="h-48 overflow-hidden">
-                            <Plot
-                              data={[
-                                {
-                                  x: s2Analysis.data1.map(v => Number(v)).filter(v => !isNaN(v)),
-                                  type: 'box',
-                                  name: s2Analysis.name1,
-                                  marker: { color: '#38bdf8' },
-                                  boxpoints: 'outliers',
-                                  orientation: 'h'
-                                },
-                                {
-                                  x: s2Analysis.data2.map(v => Number(v)).filter(v => !isNaN(v)),
-                                  type: 'box',
-                                  name: s2Analysis.name2,
-                                  marker: { color: '#fbbf24' },
-                                  boxpoints: 'outliers',
-                                  orientation: 'h'
-                                }
-                              ]}
-                              layout={{
-                                autosize: true,
-                                showlegend: false,
-                                margin: { l: 80, r: 20, t: 10, b: 30 },
-                                paper_bgcolor: 'transparent',
-                                plot_bgcolor: 'transparent',
-                                font: { color: '#94a3b8' },
-                                xaxis: {
-                                  gridcolor: '#334155',
-                                  zerolinecolor: '#475569',
-                                  tickfont: { color: '#94a3b8', size: 10 }
-                                },
-                                yaxis: {
-                                  tickfont: { color: '#94a3b8', size: 10 },
-                                  gridcolor: 'transparent'
-                                }
-                              }}
-                              style={{ width: '100%', height: '100%' }}
-                              config={{ displayModeBar: false, responsive: true }}
-                            />
+                        <ExportWrapper fileName="2sample-boxplot">
+                          <div className="bg-slate-900 p-4 rounded border border-slate-700 h-full relative" onContextMenu={(e) => e.stopPropagation()}>
+                            <h4 className="text-xs font-bold text-slate-500 uppercase mb-4 text-center tracking-widest pointer-events-none">Distribution Boxplot</h4>
+                            <div className="h-44 overflow-hidden relative z-0">
+                              <Plot
+                                data={[
+                                  {
+                                    x: s2Analysis.data1.map(v => Number(v)).filter(v => !isNaN(v)),
+                                    type: 'box',
+                                    name: s2Analysis.name1,
+                                    marker: { color: '#38bdf8' },
+                                    boxpoints: 'outliers',
+                                    orientation: 'h'
+                                  },
+                                  {
+                                    x: s2Analysis.data2.map(v => Number(v)).filter(v => !isNaN(v)),
+                                    type: 'box',
+                                    name: s2Analysis.name2,
+                                    marker: { color: '#fbbf24' },
+                                    boxpoints: 'outliers',
+                                    orientation: 'h'
+                                  }
+                                ]}
+                                layout={{
+                                  autosize: true,
+                                  showlegend: false,
+                                  margin: { l: 80, r: 20, t: 10, b: 30 },
+                                  paper_bgcolor: 'transparent',
+                                  plot_bgcolor: 'transparent',
+                                  font: { color: '#94a3b8' },
+                                  xaxis: {
+                                    gridcolor: '#334155',
+                                    zerolinecolor: '#475569',
+                                    tickfont: { color: '#94a3b8', size: 10 }
+                                  },
+                                  yaxis: {
+                                    tickfont: { color: '#94a3b8', size: 10 },
+                                    gridcolor: 'transparent'
+                                  }
+                                }}
+                                style={{ width: '100%', height: '100%' }}
+                                config={{ displayModeBar: false, responsive: true }}
+                              />
+                            </div>
                           </div>
-                        </div>
+                        </ExportWrapper>
                       </div>
                     </div>
-                  </>
+                  </div>
                 )}
               </div>
-            </>
-          )}
+            )}
 
           {activeTab === 'anova' && (
             <div className="bg-slate-800 p-6 rounded-lg border border-slate-700 shadow-xl space-y-8">
@@ -903,34 +910,36 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
               ) : (
                 <div className="space-y-8">
                   {/* Summary Metric Strip */}
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-center">
-                    <div className="bg-slate-900 p-4 rounded border border-slate-700">
-                      <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">Test Value</div>
-                      <div className="text-2xl font-mono text-red-500 font-bold">
-                        {anovaAnalysis.testResults.statistic.toFixed(3)}
+                  <ExportWrapper fileName="anova-summary">
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-center">
+                      <div className="bg-slate-900 p-4 rounded border border-slate-700">
+                        <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">Test Value</div>
+                        <div className="text-2xl font-mono text-red-500 font-bold">
+                          {anovaAnalysis.testResults.statistic.toFixed(3)}
+                        </div>
+                      </div>
+                      <div className="bg-slate-900 p-4 rounded border border-slate-700">
+                        <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">P-Value</div>
+                        <div className={`text-2xl font-mono font-bold ${anovaAnalysis.pValue < alpha ? 'text-red-500' : 'text-green-500'}`}>
+                          {anovaAnalysis.pValue.toFixed(4)}
+                        </div>
+                      </div>
+                      <div className="bg-slate-900 p-4 rounded border border-slate-700">
+                        <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">Test Used</div>
+                        <div className="text-xs mt-2 font-bold text-slate-300">
+                          {anovaAnalysis.testUsed}
+                        </div>
+                      </div>
+                      <div className="bg-slate-900 p-4 rounded border border-slate-700">
+                        <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">Decision</div>
+                        <div className={`text-xs mt-2 font-bold ${anovaAnalysis.significant ? 'text-red-400' : 'text-green-400'}`}>
+                          {anovaAnalysis.significant ? 'REJECT NULL' : 'FAIL TO REJECT'}
+                        </div>
                       </div>
                     </div>
-                    <div className="bg-slate-900 p-4 rounded border border-slate-700">
-                      <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">P-Value</div>
-                      <div className={`text-2xl font-mono font-bold ${anovaAnalysis.pValue < alpha ? 'text-red-500' : 'text-green-500'}`}>
-                        {anovaAnalysis.pValue.toFixed(4)}
-                      </div>
-                    </div>
-                    <div className="bg-slate-900 p-4 rounded border border-slate-700">
-                      <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">Test Used</div>
-                      <div className="text-xs mt-2 font-bold text-slate-300">
-                        {anovaAnalysis.testUsed}
-                      </div>
-                    </div>
-                    <div className="bg-slate-900 p-4 rounded border border-slate-700">
-                      <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">Decision</div>
-                      <div className={`text-xs mt-2 font-bold ${anovaAnalysis.significant ? 'text-red-400' : 'text-green-400'}`}>
-                        {anovaAnalysis.significant ? 'REJECT NULL' : 'FAIL TO REJECT'}
-                      </div>
-                    </div>
-                  </div>
+                  </ExportWrapper>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
                     {/* Left Diagnostic Summaries */}
                     <div className="space-y-6">
                       <div className="bg-slate-900 p-4 rounded border border-slate-700">
@@ -952,78 +961,81 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                         </p>
                       </div>
 
-                      <div className="bg-slate-900 p-4 rounded border border-slate-700">
-                         <h4 className="text-xs font-bold text-slate-500 uppercase mb-4 text-center tracking-widest text-[#94a3b8]">Distribution Boxplots</h4>
-                         <div className="h-64 overflow-hidden">
-                            <Plot
-                              data={anovaAnalysis.groups.map((g, idx) => ({
-                                x: g.data.map(v => Number(v)).filter(v => !isNaN(v)),
-                                type: 'box' as const,
-                                name: g.name,
-                                marker: { color: ['#38bdf8', '#fbbf24', '#f87171', '#a78bfa', '#34d399'][idx % 5] },
-                                boxpoints: 'outliers' as const,
-                                orientation: 'h' as const
-                              }))}
-                              layout={{
-                                autosize: true,
-                                showlegend: false,
-                                margin: { l: 80, r: 20, t: 10, b: 30 },
-                                paper_bgcolor: 'transparent',
-                                plot_bgcolor: 'transparent',
-                                font: { color: '#94a3b8' },
-                                xaxis: {
-                                  gridcolor: '#334155',
-                                  zerolinecolor: '#475569',
-                                  tickfont: { color: '#94a3b8', size: 10 }
-                                },
-                                yaxis: {
-                                  tickfont: { color: '#94a3b8', size: 10 },
-                                  gridcolor: 'transparent'
-                                }
-                              }}
-                              style={{ width: '100%', height: '100%' }}
-                              config={{ displayModeBar: false, responsive: true }}
-                            />
-                         </div>
-                      </div>
+                      <ExportWrapper fileName="anova-boxplots">
+                        <div className="bg-slate-900 p-4 rounded border border-slate-700 h-full relative" onContextMenu={(e) => e.stopPropagation()}>
+                          <h4 className="text-xs font-bold text-slate-500 uppercase mb-4 text-center tracking-widest text-[#94a3b8] pointer-events-none">Distribution Boxplots</h4>
+                          <div className="h-60 overflow-hidden relative z-0">
+                              <Plot
+                                data={anovaAnalysis.groups.map((g, idx) => ({
+                                  x: g.data.map(v => Number(v)).filter(v => !isNaN(v)),
+                                  type: 'box' as const,
+                                  name: g.name,
+                                  marker: { color: ['#38bdf8', '#fbbf24', '#f87171', '#a78bfa', '#34d399'][idx % 5] },
+                                  boxpoints: 'outliers' as const,
+                                  orientation: 'h' as const
+                                }))}
+                                layout={{
+                                  autosize: true,
+                                  showlegend: false,
+                                  margin: { l: 80, r: 20, t: 10, b: 30 },
+                                  paper_bgcolor: 'transparent',
+                                  plot_bgcolor: 'transparent',
+                                  font: { color: '#94a3b8' },
+                                  xaxis: {
+                                    gridcolor: '#334155',
+                                    zerolinecolor: '#475569',
+                                    tickfont: { color: '#94a3b8', size: 10 }
+                                  },
+                                  yaxis: {
+                                    tickfont: { color: '#94a3b8', size: 10 },
+                                    gridcolor: 'transparent'
+                                  }
+                                }}
+                                style={{ width: '100%', height: '100%' }}
+                                config={{ displayModeBar: false, responsive: true }}
+                              />
+                          </div>
+                        </div>
+                      </ExportWrapper>
                     </div>
 
-                    {/* Right Results Breakdown */}
-                    <div className="bg-slate-900 p-4 rounded border border-slate-700">
-                      <h4 className="text-xs font-bold text-slate-500 uppercase mb-4 text-center tracking-widest">Group Statistics Table</h4>
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-[10px] text-left border-collapse">
-                          <thead>
-                            <tr className="border-b border-slate-700">
-                              <th className="py-2 text-slate-500 uppercase">Group</th>
-                              <th className="py-2 text-center text-slate-500">N</th>
-                              <th className="py-2 text-center text-slate-500">Mean</th>
-                              <th className="py-2 text-center text-slate-500">Median</th>
-                              <th className="py-2 text-center text-slate-500">StDev</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {anovaAnalysis.groups.map((g, idx) => (
-                              <tr key={idx} className="border-b border-slate-800/50">
-                                <td className="py-2 text-slate-300 font-medium">{g.name}</td>
-                                <td className="py-2 text-center text-red-500 font-mono">{g.data.length}</td>
-                                <td className="py-2 text-center text-red-500 font-mono">{getMean(g.data).toFixed(2)}</td>
-                                <td className="py-2 text-center text-red-500 font-mono">{getPercentile([...g.data].sort((a,b)=>a-b), 0.5).toFixed(2)}</td>
-                                <td className="py-2 text-center text-red-500 font-mono">{getStdDev(g.data).toFixed(2)}</td>
+                    <ExportWrapper fileName="anova-table">
+                      <div className="bg-slate-900 p-4 rounded border border-slate-700">
+                        <h4 className="text-xs font-bold text-slate-500 uppercase mb-4 text-center tracking-widest">Group Statistics Table</h4>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-[10px] text-left border-collapse">
+                            <thead>
+                              <tr className="border-b border-slate-700">
+                                <th className="py-2 text-slate-500 uppercase">Group</th>
+                                <th className="py-2 text-center text-slate-500">N</th>
+                                <th className="py-2 text-center text-slate-500">Mean</th>
+                                <th className="py-2 text-center text-slate-500">Median</th>
+                                <th className="py-2 text-center text-slate-500">StDev</th>
                               </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                            </thead>
+                            <tbody>
+                              {anovaAnalysis.groups.map((g, idx) => (
+                                <tr key={idx} className="border-b border-slate-800/50">
+                                  <td className="py-2 text-slate-300 font-medium">{g.name}</td>
+                                  <td className="py-2 text-center text-red-500 font-mono">{g.data.length}</td>
+                                  <td className="py-2 text-center text-red-500 font-mono">{getMean(g.data).toFixed(2)}</td>
+                                  <td className="py-2 text-center text-red-500 font-mono">{getPercentile([...g.data].sort((a,b)=>a-b), 0.5).toFixed(2)}</td>
+                                  <td className="py-2 text-center text-red-500 font-mono">{getStdDev(g.data).toFixed(2)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        <div className="mt-8 p-4 bg-slate-950 rounded border border-slate-800">
+                          <h5 className="text-[10px] font-bold text-sky-400 uppercase mb-2 italic">Conclusion</h5>
+                          <p className="text-xs text-slate-400 leading-relaxed">
+                            {anovaAnalysis.significant ? 
+                              `We reject the null hypothesis at the ${alpha} significance level. Evidence suggests at least one group mean is significantly different from the others.` : 
+                              `We fail to reject the null hypothesis at the ${alpha} level. There is insufficient evidence to conclude that any group mean differs significantly.`}
+                          </p>
+                        </div>
                       </div>
-                      <div className="mt-8 p-4 bg-slate-950 rounded border border-slate-800">
-                        <h5 className="text-[10px] font-bold text-sky-400 uppercase mb-2 italic">Conclusion</h5>
-                        <p className="text-xs text-slate-400 leading-relaxed">
-                          {anovaAnalysis.significant ? 
-                            `We reject the null hypothesis at the ${alpha} significance level. Evidence suggests at least one group mean is significantly different from the others.` : 
-                            `We fail to reject the null hypothesis at the ${alpha} level. There is insufficient evidence to conclude that any group mean differs significantly.`}
-                        </p>
-                      </div>
-                    </div>
+                    </ExportWrapper>
                   </div>
                 </div>
               )}

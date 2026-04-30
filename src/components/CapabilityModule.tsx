@@ -11,6 +11,8 @@ import {
   ReferenceLine
 } from 'recharts';
 
+import ExportWrapper from './ExportWrapper';
+
 // NOTE: We will build these exact functions when we tackle src/lib/stats.ts
 import { 
   analyzeCapability, 
@@ -80,7 +82,7 @@ export default function CapabilityModule({ datasets }: { datasets: any[] }) {
         <h2 className="text-2xl font-bold text-white tracking-tight">Process Capability (Cp/Cpk)</h2>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 items-start">
         
         {/* --- LEFT SIDEBAR: CONFIGURATION --- */}
         <div className="col-span-1 space-y-6">
@@ -171,90 +173,98 @@ export default function CapabilityModule({ datasets }: { datasets: any[] }) {
           
           {/* Diagnostics Banner */}
           {results && (
-            <div className={`p-4 rounded-lg border flex gap-4 ${results.isNormal && results.isStable ? 'bg-slate-800 border-green-500/30' : 'bg-orange-900/20 border-orange-500/50'}`}>
-              <div>
-                <span className={`text-sm font-bold ${results.isNormal ? 'text-green-400' : 'text-orange-400'}`}>
-                  {results.isNormal ? '✓ Normal Distribution' : '⚠ Non-Normal (Using ISO Percentile Method)'}
-                </span>
-                <span className="text-xs text-slate-400 ml-2">(P-Value: {results.normalityPValue.toFixed(3)})</span>
+            <ExportWrapper fileName="capability-diagnostics">
+              <div className={`p-4 rounded-lg border flex gap-4 ${results.isNormal && results.isStable ? 'bg-slate-800 border-green-500/30' : 'bg-orange-900/20 border-orange-500/50'}`}>
+                <div>
+                  <span className={`text-sm font-bold ${results.isNormal ? 'text-green-400' : 'text-orange-400'}`}>
+                    {results.isNormal ? '✓ Normal Distribution' : '⚠ Non-Normal (Using ISO Percentile Method)'}
+                  </span>
+                  <span className="text-xs text-slate-400 ml-2">(P-Value: {results.normalityPValue.toFixed(3)})</span>
+                </div>
+                <div>
+                  <span className={`text-sm font-bold ${results.isStable ? 'text-green-400' : 'text-orange-400'}`}>
+                    {results.isStable ? '✓ Process Stable' : '⚠ Process Out of Control (Check I-MR)'}
+                  </span>
+                </div>
               </div>
-              <div>
-                <span className={`text-sm font-bold ${results.isStable ? 'text-green-400' : 'text-orange-400'}`}>
-                  {results.isStable ? '✓ Process Stable' : '⚠ Process Out of Control (Check I-MR)'}
-                </span>
-              </div>
-            </div>
+            </ExportWrapper>
           )}
 
           {/* Results Grid */}
           {results && (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
-                <div className="text-xs text-slate-400 uppercase tracking-wider">Cp (Potential)</div>
-                <div className="text-2xl font-mono text-white mt-1">{results.Cp ? results.Cp.toFixed(2) : 'N/A'}</div>
+            <ExportWrapper fileName="capability-indices">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                  <div className="text-xs text-slate-400 uppercase tracking-wider">Cp (Potential)</div>
+                  <div className="text-2xl font-mono text-white mt-1">{results.Cp ? results.Cp.toFixed(2) : 'N/A'}</div>
+                </div>
+                <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                  <div className="text-xs text-slate-400 uppercase tracking-wider">Cpk (Demonstrated)</div>
+                  <div className="text-2xl font-mono text-yellow-400 mt-1">{results.Cpk ? results.Cpk.toFixed(2) : 'N/A'}</div>
+                </div>
+                <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                  <div className="text-xs text-slate-400 uppercase tracking-wider">Pp (Overall)</div>
+                  <div className="text-2xl font-mono text-white mt-1">{results.Pp ? results.Pp.toFixed(2) : 'N/A'}</div>
+                </div>
+                <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                  <div className="text-xs text-slate-400 uppercase tracking-wider">Ppk (Overall Actual)</div>
+                  <div className="text-2xl font-mono text-cyan-400 mt-1">{results.Ppk ? results.Ppk.toFixed(2) : 'N/A'}</div>
+                </div>
               </div>
-              <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
-                <div className="text-xs text-slate-400 uppercase tracking-wider">Cpk (Demonstrated)</div>
-                <div className="text-2xl font-mono text-yellow-400 mt-1">{results.Cpk ? results.Cpk.toFixed(2) : 'N/A'}</div>
-              </div>
-              <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
-                <div className="text-xs text-slate-400 uppercase tracking-wider">Pp (Overall)</div>
-                <div className="text-2xl font-mono text-white mt-1">{results.Pp ? results.Pp.toFixed(2) : 'N/A'}</div>
-              </div>
-              <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
-                <div className="text-xs text-slate-400 uppercase tracking-wider">Ppk (Overall Actual)</div>
-                <div className="text-2xl font-mono text-cyan-400 mt-1">{results.Ppk ? results.Ppk.toFixed(2) : 'N/A'}</div>
-              </div>
-            </div>
+            </ExportWrapper>
           )}
 
           {/* Chart Area */}
-          <div className="bg-slate-800 p-4 rounded-lg border border-slate-700 h-[400px]">
-             {rawData.length > 0 ? (
-               <ResponsiveContainer width="100%" height="100%">
-                 <ComposedChart data={chartData.histogram} margin={{ top: 20, right: 30, left: 0, bottom: 20 }}>
-                   <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
-                   
-                   <XAxis dataKey="x" type="number" domain={['auto', 'auto']} tick={{fill: '#94a3b8', fontSize: 12}} />
-                   <YAxis yAxisId="left" tick={{fill: '#94a3b8', fontSize: 12}} />
-                   
-                   <Tooltip 
-                     contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', color: '#f8fafc' }}
-                     itemStyle={{ color: '#e2e8f0' }}
-                   />
+          <ExportWrapper fileName="capability-histogram">
+            <div className="bg-slate-800 p-4 rounded-lg border border-slate-700 h-[400px]">
+               {rawData.length > 0 ? (
+                 <ResponsiveContainer width="100%" height="100%">
+                   <ComposedChart data={chartData.histogram} margin={{ top: 20, right: 30, left: 0, bottom: 20 }}>
+                     <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
+                     
+                     <XAxis dataKey="x" type="number" domain={['auto', 'auto']} tick={{fill: '#94a3b8', fontSize: 12}} />
+                     <YAxis yAxisId="left" tick={{fill: '#94a3b8', fontSize: 12}} />
+                     
+                     <Tooltip 
+                       contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', color: '#f8fafc' }}
+                       itemStyle={{ color: '#e2e8f0' }}
+                     />
 
-                   <Bar yAxisId="left" dataKey="count" fill="#475569" barSize={40} />
+                     <Bar yAxisId="left" dataKey="count" fill="#475569" barSize={40} />
 
-                   {results?.isNormal && (
-                     <Line yAxisId="left" data={chartData.curve} type="monotone" dataKey="y" stroke="#38bdf8" strokeWidth={3} dot={false} isAnimationActive={false} />
-                   )}
+                     {results?.isNormal && (
+                       <Line yAxisId="left" data={chartData.curve} type="monotone" dataKey="y" stroke="#38bdf8" strokeWidth={3} dot={false} isAnimationActive={false} />
+                     )}
 
-                   {lsl !== '' && <ReferenceLine yAxisId="left" x={Number(lsl)} stroke="#ef4444" strokeDasharray="5 5" label={{ position: 'top', value: 'LSL', fill: '#ef4444', fontSize: 12 }} />}
-                   {usl !== '' && <ReferenceLine yAxisId="left" x={Number(usl)} stroke="#ef4444" strokeDasharray="5 5" label={{ position: 'top', value: 'USL', fill: '#ef4444', fontSize: 12 }} />}
-                   {target !== '' && <ReferenceLine yAxisId="left" x={Number(target)} stroke="#22c55e" label={{ position: 'top', value: 'Target', fill: '#22c55e', fontSize: 12 }} />}
-                 </ComposedChart>
-               </ResponsiveContainer>
-             ) : (
-               <div className="flex items-center justify-center h-full text-slate-500">Select a dataset to view distribution</div>
-             )}
-          </div>
+                     {lsl !== '' && <ReferenceLine yAxisId="left" x={Number(lsl)} stroke="#ef4444" strokeDasharray="5 5" label={{ position: 'top', value: 'LSL', fill: '#ef4444', fontSize: 12 }} />}
+                     {usl !== '' && <ReferenceLine yAxisId="left" x={Number(usl)} stroke="#ef4444" strokeDasharray="5 5" label={{ position: 'top', value: 'USL', fill: '#ef4444', fontSize: 12 }} />}
+                     {target !== '' && <ReferenceLine yAxisId="left" x={Number(target)} stroke="#22c55e" label={{ position: 'top', value: 'Target', fill: '#22c55e', fontSize: 12 }} />}
+                   </ComposedChart>
+                 </ResponsiveContainer>
+               ) : (
+                 <div className="flex items-center justify-center h-full text-slate-500">Select a dataset to view distribution</div>
+               )}
+            </div>
+          </ExportWrapper>
 
           {/* PPM Estimates */}
           {results && (
-            <div className="grid grid-cols-2 gap-4">
-               <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
-                  <h4 className="text-sm font-semibold text-slate-300 border-b border-slate-700 pb-2 mb-2">Within Performance (Short Term)</h4>
-                  <div className="flex justify-between text-sm"><span className="text-slate-400">PPM &lt; LSL:</span> <span className="font-mono text-white">{results.expectedPpmLsl.toFixed(0)}</span></div>
-                  <div className="flex justify-between text-sm"><span className="text-slate-400">PPM &gt; USL:</span> <span className="font-mono text-white">{results.expectedPpmUsl.toFixed(0)}</span></div>
-                  <div className="flex justify-between text-sm font-bold mt-2"><span className="text-slate-300">Total PPM:</span> <span className="font-mono text-red-400">{results.expectedPpmTotal.toFixed(0)}</span></div>
-               </div>
-               <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
-                  <h4 className="text-sm font-semibold text-slate-300 border-b border-slate-700 pb-2 mb-2">Overall Performance (Long Term)</h4>
-                  <div className="flex justify-between text-sm"><span className="text-slate-400">PPM &lt; LSL:</span> <span className="font-mono text-white">{results.overallPpmLsl.toFixed(0)}</span></div>
-                  <div className="flex justify-between text-sm"><span className="text-slate-400">PPM &gt; USL:</span> <span className="font-mono text-white">{results.overallPpmUsl.toFixed(0)}</span></div>
-                  <div className="flex justify-between text-sm font-bold mt-2"><span className="text-slate-300">Total PPM:</span> <span className="font-mono text-red-400">{results.overallPpmTotal.toFixed(0)}</span></div>
-               </div>
-            </div>
+            <ExportWrapper fileName="capability-ppm">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                    <h4 className="text-sm font-semibold text-slate-300 border-b border-slate-700 pb-2 mb-2">Within Performance (Short Term)</h4>
+                    <div className="flex justify-between text-sm"><span className="text-slate-400">PPM &lt; LSL:</span> <span className="font-mono text-white">{results.expectedPpmLsl.toFixed(0)}</span></div>
+                    <div className="flex justify-between text-sm"><span className="text-slate-400">PPM &gt; USL:</span> <span className="font-mono text-white">{results.expectedPpmUsl.toFixed(0)}</span></div>
+                    <div className="flex justify-between text-sm font-bold mt-2"><span className="text-slate-300">Total PPM:</span> <span className="font-mono text-red-400">{results.expectedPpmTotal.toFixed(0)}</span></div>
+                </div>
+                <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                    <h4 className="text-sm font-semibold text-slate-300 border-b border-slate-700 pb-2 mb-2">Overall Performance (Long Term)</h4>
+                    <div className="flex justify-between text-sm"><span className="text-slate-400">PPM &lt; LSL:</span> <span className="font-mono text-white">{results.overallPpmLsl.toFixed(0)}</span></div>
+                    <div className="flex justify-between text-sm"><span className="text-slate-400">PPM &gt; USL:</span> <span className="font-mono text-white">{results.overallPpmUsl.toFixed(0)}</span></div>
+                    <div className="flex justify-between text-sm font-bold mt-2"><span className="text-slate-300">Total PPM:</span> <span className="font-mono text-red-400">{results.overallPpmTotal.toFixed(0)}</span></div>
+                </div>
+              </div>
+            </ExportWrapper>
           )}
 
         </div>

@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer, Cell } from 'recharts';
 
+import ExportWrapper from './ExportWrapper';
+
 export default function DOEModule({ datasets }: { datasets: any[] }) {
   const [factors, setFactors] = useState([{ id: 1, name: 'Factor A', low: -1, high: 1 }]);
   const [responseId, setResponseId] = useState('');
@@ -27,7 +29,7 @@ export default function DOEModule({ datasets }: { datasets: any[] }) {
         </button>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 items-start">
         {/* Sidebar Parameters */}
         <div className="col-span-1 space-y-4">
           <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
@@ -68,33 +70,37 @@ export default function DOEModule({ datasets }: { datasets: any[] }) {
 
         {/* Output */}
         <div className="lg:col-span-3 space-y-6">
-          <div className="bg-slate-800 p-4 rounded-lg border border-slate-700 h-[400px]">
-            <h3 className="text-lg font-bold mb-4 text-center">Pareto Chart of Standardized Effects</h3>
-            <ResponsiveContainer width="100%" height="85%">
-              <BarChart data={paretoData} layout="vertical" margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />
-                <XAxis type="number" stroke="#94a3b8" />
-                <YAxis dataKey="term" type="category" stroke="#94a3b8" />
-                <Tooltip contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155' }} />
-                <ReferenceLine x={tCritical} stroke="#ef4444" strokeDasharray="5 5" label={{ position: 'top', value: 'Alpha Limit', fill: '#ef4444' }} />
-                <Bar dataKey="effect" barSize={30}>
-                  {paretoData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.significant ? '#38bdf8' : '#475569'} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-          
-          <div className="bg-slate-800 p-6 rounded-lg border border-slate-700">
-            <h3 className="text-lg font-bold mb-4 text-sky-400">Response Optimizer</h3>
-            <p className="text-sm text-slate-400 mb-4">Select a goal to calculate optimal uncoded factor settings.</p>
-            <div className="flex gap-4">
-              <button className="px-4 py-2 bg-slate-700 hover:bg-sky-600 rounded text-sm transition">Maximize Response</button>
-              <button className="px-4 py-2 bg-slate-700 hover:bg-sky-600 rounded text-sm transition">Minimize Response</button>
-              <button className="px-4 py-2 bg-slate-700 hover:bg-sky-600 rounded text-sm transition">Target Value</button>
+          <ExportWrapper fileName="doe-pareto-chart">
+            <div className="bg-slate-800 p-4 rounded-lg border border-slate-700 h-[400px]">
+              <h3 className="text-lg font-bold mb-4 text-center">Pareto Chart of Standardized Effects</h3>
+              <ResponsiveContainer width="100%" height="85%">
+                <BarChart data={paretoData} layout="vertical" margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />
+                  <XAxis type="number" stroke="#94a3b8" />
+                  <YAxis dataKey="term" type="category" stroke="#94a3b8" />
+                  <Tooltip contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155' }} />
+                  <ReferenceLine x={tCritical} stroke="#ef4444" strokeDasharray="5 5" label={{ position: 'top', value: 'Alpha Limit', fill: '#ef4444' }} />
+                  <Bar dataKey="effect" barSize={30}>
+                    {paretoData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.significant ? '#38bdf8' : '#475569'} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
             </div>
-          </div>
+          </ExportWrapper>
+          
+          <ExportWrapper fileName="doe-optimizer">
+            <div className="bg-slate-800 p-6 rounded-lg border border-slate-700">
+              <h3 className="text-lg font-bold mb-4 text-sky-400">Response Optimizer</h3>
+              <p className="text-sm text-slate-400 mb-4">Select a goal to calculate optimal uncoded factor settings.</p>
+              <div className="flex gap-4">
+                <button className="px-4 py-2 bg-slate-700 hover:bg-sky-600 rounded text-sm transition">Maximize Response</button>
+                <button className="px-4 py-2 bg-slate-700 hover:bg-sky-600 rounded text-sm transition">Minimize Response</button>
+                <button className="px-4 py-2 bg-slate-700 hover:bg-sky-600 rounded text-sm transition">Target Value</button>
+              </div>
+            </div>
+          </ExportWrapper>
         </div>
       </div>
     </div>
