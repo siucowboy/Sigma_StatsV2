@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, 
   ReferenceLine, ResponsiveContainer, Cell, LineChart, Line, Legend, LabelList
@@ -58,8 +58,36 @@ export default function DOEModule({ datasets }: { datasets: any[] }) {
 
   // Sync selected terms when factors change
   const allAvailableTerms = useMemo(() => getAllPossibleTerms(factors.map(f => f.name)), [factors]);
+  const selectedInteractionTerms = useMemo(
+    () => selectedTerms.filter(term => term.includes('*')),
+    [selectedTerms]
+  );
+
+  const getInteractionValue = (run: any, term: string) => {
+    return term
+      .split('*')
+      .reduce((acc, factorName) => acc * Number(run[`${factorName}_coded`] ?? 1), 1);
+  };
 
   // If selectedTerms is empty (initial state), select all. Also reset if available terms change.
+  const prevSelectedTermsRef = useRef<string[]>([]);
+  useEffect(() => {
+    const newlyRemoved = prevSelectedTermsRef.current.filter(t => !selectedTerms.includes(t));
+    if (newlyRemoved.length > 0) {
+      setVisibleMainEffects(prev => prev.filter(v => !newlyRemoved.includes(v)));
+    }
+    
+    const newlyAdded = selectedTerms.filter(t => !prevSelectedTermsRef.current.includes(t));
+    if (newlyAdded.length > 0) {
+      const addedMainEffects = newlyAdded.filter(t => !t.includes('*'));
+      if (addedMainEffects.length > 0) {
+        setVisibleMainEffects(prev => [...new Set([...prev, ...addedMainEffects])]);
+      }
+    }
+    
+    prevSelectedTermsRef.current = selectedTerms;
+  }, [selectedTerms]);
+
   useEffect(() => {
     setSelectedTerms(allAvailableTerms);
   }, [allAvailableTerms]);
@@ -84,22 +112,19 @@ export default function DOEModule({ datasets }: { datasets: any[] }) {
   const analysisResults = useMemo(() => {
     if (!canAnalyze || !responseDataset) return null;
     
-    // Simple alignment: ensure we have numeric response values
-    const dataWithResponse = [];
-    for (let i = 0; i < designMatrix.length; i++) {
+    // ALIGNMENT: Map response values to the visible table row index (Run Order)
+    const dataWithResponse = designMatrix.map((run, i) => {
       const val = Number(responseDataset.values[i]);
-      if (isNaN(val)) continue;
-      dataWithResponse.push({
-        ...designMatrix[i],
-        Response: val
-      });
-    }
+      return {
+        ...run,
+        Response: isNaN(val) ? null : val
+      };
+    }).filter(d => d.Response !== null);
 
     if (dataWithResponse.length === 0) return null;
 
     const factorNames = factors.map(f => f.name);
     try {
-      // Allow saturated models (n == k + 1)
       const res = analyzeDOE(dataWithResponse, 'Response', factorNames, selectedTerms);
       
       if (displayUnits === 'uncoded') {
@@ -116,7 +141,7 @@ export default function DOEModule({ datasets }: { datasets: any[] }) {
 
   // --- Plots Data ---
   const dataWithResponseMapped = useMemo(() => {
-    if (!canAnalyze) return [];
+    if (!canAnalyze || !responseDataset) return [];
     return designMatrix.map((run, i) => ({
       ...run,
       Response: Number(responseDataset.values[i])
@@ -437,12 +462,20 @@ export default function DOEModule({ datasets }: { datasets: any[] }) {
                 <div className="flex gap-2">
                   <button 
                     onClick={() => {
-                        const headers = ['Std Ord', 'Run Ord', 'Block', ...factors.map(f => f.name), 'Response'];
+                        const headers = [
+                            'Std Ord',
+                            'Run Ord',
+                            'Block',
+                            ...factors.map(f => f.name),
+                            ...selectedInteractionTerms,
+                            'Response'
+                        ];
                         const rows = designMatrix.map((run, i) => [
+                            run.stdOrder,
                             i + 1,
-                            run.id,
                             run.block,
                             ...factors.map(f => displayCoded ? run[`${f.name}_coded`] : run[f.name]),
+                            ...selectedInteractionTerms.map(term => getInteractionValue(run, term)),
                             responseDataset && responseDataset.values[i] !== undefined ? responseDataset.values[i] : ''
                         ]);
                         const tsv = [headers, ...rows].map(row => row.join('\t')).join('\n');
@@ -478,18 +511,26 @@ export default function DOEModule({ datasets }: { datasets: any[] }) {
                       {factors.map(f => (
                         <th key={f.name} className="p-3 font-bold text-indigo-400">{f.name}</th>
                       ))}
+                      {selectedInteractionTerms.map(term => (
+                        <th key={term} className="p-3 font-bold text-amber-400">{term}</th>
+                      ))}
                       <th className="p-3 font-bold text-emerald-400">Response (Y)</th>
                     </tr>
                   </thead>
                   <tbody>
                     {designMatrix.map((run, i) => (
-                      <tr key={run.id} className="border-b border-slate-800 hover:bg-slate-800/40 transition-colors">
-                        <td className="p-3 text-xs font-mono text-slate-600">{i + 1}</td>
-                        <td className="p-3 text-xs font-mono text-slate-400">{run.id}</td>
+                      <tr key={run.stdOrder} className="border-b border-slate-800 hover:bg-slate-800/40 transition-colors">
+                        <td className="p-3 text-xs font-mono text-slate-400">{run.stdOrder}</td>
+                        <td className="p-3 text-xs font-mono text-slate-600 font-bold">{i + 1}</td>
                         <td className="p-3 text-xs font-mono text-slate-400">{run.block}</td>
                         {factors.map(f => (
                           <td key={f.name} className={`p-3 text-xs font-mono font-medium ${displayCoded ? (run[`${f.name}_coded`] === 1 ? 'text-indigo-400' : 'text-slate-500') : 'text-white'}`}>
                             {displayCoded ? run[`${f.name}_coded`] : run[f.name]}
+                          </td>
+                        ))}
+                        {selectedInteractionTerms.map(term => (
+                          <td key={term} className="p-3 text-xs font-mono text-amber-400">
+                            {getInteractionValue(run, term)}
                           </td>
                         ))}
                         <td className="p-3 text-xs font-mono text-emerald-400">
@@ -508,20 +549,20 @@ export default function DOEModule({ datasets }: { datasets: any[] }) {
 
           {activeTab === 'analysis' && (
             <div className="space-y-6">
-               {!canAnalyze ? (
+               {(!canAnalyze || !analysisResults) ? (
                  <div className="bg-slate-900/50 border border-slate-800 rounded-2xl h-80 flex flex-col items-center justify-center p-10 text-center">
                     <div className="p-4 bg-slate-800 rounded-full mb-4">
                       <BarChart2 className="w-8 h-8 text-slate-600" />
                     </div>
-                    <h3 className="text-slate-300 font-bold mb-2">Insufficient Data for Analysis</h3>
-                    <p className="text-slate-500 text-sm max-w-xs">Select a response dataset with at least {designMatrix.length} measurements to generate the Pareto chart and ANOVA.</p>
+                    <h3 className="text-slate-300 font-bold mb-2">Analysis Results Unavailable</h3>
+                    <p className="text-slate-500 text-sm max-w-xs">{!canAnalyze ? `Select a response dataset with at least ${designMatrix.length} measurements to generate the Pareto chart and ANOVA.` : "The model could not be calculated (singular matrix or insufficient variation)."}</p>
                  </div>
                ) : (
                  <>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div className="bg-slate-900 p-4 rounded-xl border border-slate-800">
                       <div className="text-[10px] text-slate-500 uppercase tracking-widest font-bold mb-1">R-Squared</div>
-                      <div className="text-2xl font-mono text-white">{(analysisResults?.rSq * 100 || 0).toFixed(1)}%</div>
+                      <div className="text-2xl font-mono text-white">{(analysisResults?.rSq * 100 || 0).toFixed(2)}%</div>
                     </div>
                     <div className="bg-slate-900 p-4 rounded-xl border border-slate-800">
                       <div className="text-[10px] text-slate-500 uppercase tracking-widest font-bold mb-1">Std Error (S)</div>
@@ -576,12 +617,8 @@ export default function DOEModule({ datasets }: { datasets: any[] }) {
                             data={analysisResults?.coeffs.slice(1).map((c: any) => ({
                               ...c,
                               absT: Math.abs(c.t),
-                              absEffect: Math.abs(c.effect)
-                            })).sort((a: any, b: any) => {
-                              const valA = analysisResults?.anova?.error?.df > 0 ? a.absT : a.absEffect;
-                              const valB = analysisResults?.anova?.error?.df > 0 ? b.absT : b.absEffect;
-                              return valB - valA;
-                            }) || []} 
+                              absEffect: Math.abs(c.effect || 0)
+                            })).sort((a: any, b: any) => b.absT - a.absT) || []} 
                             layout="vertical"
                             margin={{ top: 0, right: 30, left: 40, bottom: 20 }}
                           >
@@ -591,7 +628,7 @@ export default function DOEModule({ datasets }: { datasets: any[] }) {
                               <Tooltip 
                                 cursor={{ fill: '#1e293b' }} 
                                 contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155' }}
-                                formatter={(value: any, name: any) => [Number(value).toFixed(4), 'Magnitude']}
+                                formatter={(value: any) => [Number(value).toFixed(4), 'Standardized Effect']}
                               />
                               {analysisResults?.anova?.error?.df > 0 && !isNaN(jStat.studentt.inv(1 - alpha/2, analysisResults.anova.error.df)) && (
                                 <ReferenceLine 
@@ -608,11 +645,10 @@ export default function DOEModule({ datasets }: { datasets: any[] }) {
                                   }} 
                                 />
                               )}
-                              <Bar dataKey={analysisResults?.anova?.error?.df > 0 ? "absT" : "absEffect"} name="Standardized Effect" radius={[0, 4, 4, 0]}>
+                              <Bar dataKey="absT" name="Standardized Effect" radius={[0, 4, 4, 0]}>
                                 {analysisResults?.coeffs.slice(1).map((entry: any, index: number) => {
                                   const tCrit = analysisResults?.anova?.error?.df > 0 ? Math.abs(jStat.studentt.inv(1 - alpha/2, analysisResults.anova.error.df)) : 2.0;
-                                  const val = analysisResults?.anova?.error?.df > 0 ? Math.abs(entry.t) : Math.abs(entry.effect);
-                                  return <Cell key={`cell-${index}`} fill={val > tCrit ? '#818cf8' : '#475569'} />;
+                                  return <Cell key={`cell-${index}`} fill={Math.abs(entry.t) > tCrit ? '#818cf8' : '#475569'} />;
                                 })}
                               </Bar>
                           </BarChart>
@@ -626,7 +662,7 @@ export default function DOEModule({ datasets }: { datasets: any[] }) {
                         <ResponsiveContainer width="100%" height="90%">
                           <BarChart 
                             data={[
-                              ...(analysisResults?.adjustedSS || []),
+                              { term: 'Model', ss: analysisResults?.anova?.model?.ss || 0, isModel: true },
                               { term: 'Error', ss: analysisResults?.anova?.error?.ss || 0, isError: true }
                             ].sort((a, b) => b.ss - a.ss)}
                             layout="vertical"
@@ -634,7 +670,7 @@ export default function DOEModule({ datasets }: { datasets: any[] }) {
                           >
                               <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />
                               <XAxis type="number" stroke="#94a3b8" fontSize={10} hide />
-                              <YAxis dataKey="term" type="category" stroke="#94a3b8" fontSize={10} width={80} />
+                              <YAxis dataKey="term" type="category" stroke="#f8fafc" fontSize={11} width={80} fontWeight="bold" />
                               <Tooltip 
                                 cursor={{ fill: '#1e293b' }} 
                                 contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155' }}
@@ -647,19 +683,19 @@ export default function DOEModule({ datasets }: { datasets: any[] }) {
                                   content={(props: any) => {
                                     const { x, y, width, height, value } = props;
                                     const totalSS = analysisResults?.anova?.total?.ss || 1;
-                                    const pct = ((value / totalSS) * 100).toFixed(1);
+                                    const pct = ((value / totalSS) * 100).toFixed(2);
                                     return (
-                                      <text x={x + width + 5} y={y + height / 2 + 4} fill="#94a3b8" fontSize={9} fontWeight="bold">
-                                        {Number(value).toFixed(2)} ({pct}%)
+                                      <text x={x + width + 8} y={y + height / 2 + 5} fill="#f1f5f9" fontSize={12} fontWeight="900" textAnchor="start">
+                                        {pct}%
                                       </text>
                                     );
                                   }}
                                 />
-                                {([
-                                  ...(analysisResults?.adjustedSS || []),
+                                {[
+                                  { term: 'Model', ss: analysisResults?.anova?.model?.ss || 0, isModel: true },
                                   { term: 'Error', ss: analysisResults?.anova?.error?.ss || 0, isError: true }
-                                ].sort((a, b) => b.ss - a.ss)).map((entry: any, index: number) => (
-                                  <Cell key={`cell-ss-${index}`} fill={entry.isError ? '#ef4444' : '#f59e0b'} />
+                                ].sort((a, b) => b.ss - a.ss).map((entry: any, index: number) => (
+                                  <Cell key={`cell-ss-${index}`} fill={entry.isError ? '#ef4444' : '#38bdf8'} />
                                 ))}
                               </Bar>
                           </BarChart>
@@ -785,13 +821,13 @@ export default function DOEModule({ datasets }: { datasets: any[] }) {
                 ))}
               </div>
 
-              {!canAnalyze ? (
+              {(!canAnalyze || !analysisResults) ? (
                  <div className="bg-slate-900/50 border border-slate-800 rounded-2xl h-80 flex flex-col items-center justify-center p-10 text-center">
                     <div className="p-4 bg-slate-800 rounded-full mb-4">
                       <Layout className="w-8 h-8 text-slate-600" />
                     </div>
                     <h3 className="text-slate-300 font-bold mb-2">Configure Responses to View Plots</h3>
-                    <p className="text-slate-500 text-sm max-w-xs">Main Effects and Interaction plots will generated automatically from the response variable.</p>
+                    <p className="text-slate-500 text-sm max-w-xs">{!canAnalyze ? "Main Effects and Interaction plots will generated automatically from the response variable." : "The model could not be calculated (singular matrix or insufficient variation)."}</p>
                  </div>
               ) : (
                 <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
@@ -875,7 +911,7 @@ export default function DOEModule({ datasets }: { datasets: any[] }) {
                                      </div>
                                      <div className="h-44">
                                        <ResponsiveContainer width="100%" height="100%">
-                                         <LineChart margin={{ top: 5, right: 20, left: -20, bottom: 20 }}>
+                                         <LineChart data={iData} margin={{ top: 5, right: 20, left: -20, bottom: 20 }}>
                                             <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
                                             <XAxis dataKey="name" fontSize={9} stroke="#94a3b8" label={{ value: f2.name, position: 'insideBottom', offset: -5, fontSize: 8, fill: '#64748b' }} />
                                             <YAxis fontSize={9} stroke="#94a3b8" domain={['auto', 'auto']} />
@@ -903,13 +939,13 @@ export default function DOEModule({ datasets }: { datasets: any[] }) {
 
           {activeTab === 'residuals' && (
             <div className="space-y-6">
-               {!canAnalyze ? (
+               {(!canAnalyze || !analysisResults) ? (
                  <div className="bg-slate-900/50 border border-slate-800 rounded-2xl h-80 flex flex-col items-center justify-center p-10 text-center">
                     <div className="p-4 bg-slate-800 rounded-full mb-4">
                       <Percent className="w-8 h-8 text-slate-600" />
                     </div>
                     <h3 className="text-slate-300 font-bold mb-2">Residual Analysis</h3>
-                    <p className="text-slate-500 text-sm max-w-xs">Residual diagnostics will appear once a response variable is selected and the model is fit.</p>
+                    <p className="text-slate-500 text-sm max-w-xs">{!canAnalyze ? "Residual diagnostics will appear once a response variable is selected and the model is fit." : "Residual analysis is unavailable because the model could not be fit."}</p>
                  </div>
                ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

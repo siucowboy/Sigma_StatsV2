@@ -181,7 +181,7 @@ export default function RegressionModule({ datasets }: { datasets: any[] }) {
                   </div>
                   <div className="bg-slate-900/50 p-4 rounded border border-slate-700/50 text-center">
                     <div className="text-xs text-slate-500 uppercase tracking-widest font-bold">Model P-Val</div>
-                    <div className={`text-xl font-mono mt-1 ${results?.anova.model.p < 0.05 ? 'text-emerald-400' : 'text-slate-400'}`}>
+                    <div className={`text-xl font-mono mt-1 ${results && results.anova.model.p < 0.05 ? 'text-emerald-400' : 'text-slate-400'}`}>
                       {results ? (results.anova.model.p < 0.001 ? '< 0.001' : results.anova.model.p.toFixed(4)) : '--'}
                     </div>
                   </div>
