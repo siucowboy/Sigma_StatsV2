@@ -85,7 +85,7 @@ export default function RegressionModule({ datasets }: { datasets: any[] }) {
   // Histogram Data
   const residualHistogram = useMemo(() => {
     if (!results) return [];
-    return generateDynamicHistogram(results.residuals.map(r => r.res));
+    return generateDynamicHistogram(results.residuals.map(r => r.value));
   }, [results]);
 
   const togglePredictor = (id: string) => {
@@ -510,7 +510,7 @@ export default function RegressionModule({ datasets }: { datasets: any[] }) {
                     <div className="text-[10px] text-center text-slate-500 mb-4 uppercase font-bold tracking-widest">Versus Order</div>
                     <ResponsiveContainer width="100%" height="85%">
                       <ComposedChart 
-                        data={sampleData(results.residuals.map(r => ({ obsOrder: r.order, resid: r.res })), 1000)} 
+                        data={sampleData(results.residuals.map(r => ({ obsOrder: r.order, resid: r.value })), 1000)} 
                         margin={{ top: 10, right: 30, bottom: 20, left: 10 }}
                       >
                         <CartesianGrid strokeDasharray="3 3" stroke="#334155" />

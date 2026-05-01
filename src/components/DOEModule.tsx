@@ -1,15 +1,16 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, 
-  ReferenceLine, ResponsiveContainer, Cell, LineChart, Line, Legend
+  ReferenceLine, ResponsiveContainer, Cell, LineChart, Line, Legend, LabelList
 } from 'recharts';
 import { 
   Plus, Trash2, RefreshCw, Layers, Grid, BarChart2, 
   Layout, Settings2, Info, ArrowRightLeft, Percent, Eye, EyeOff
 } from 'lucide-react';
-
+import * as jStatModule from 'jstat';
+const jStat: any = (jStatModule as any).default?.jStat || (jStatModule as any).jStat || (jStatModule as any).default || jStatModule;
 import ExportWrapper from './ExportWrapper';
-import { generateFactorialDesign, analyzeDOE, getMean } from '../lib/stats';
+import { generateFactorialDesign, analyzeDOE, getMean, getUncodedCoefficients } from '../lib/stats';
 
 export default function DOEModule({ datasets }: { datasets: any[] }) {
   // --- State ---
@@ -23,10 +24,49 @@ export default function DOEModule({ datasets }: { datasets: any[] }) {
   const [alpha, setAlpha] = useState(0.05);
   const [isRandomOrder, setIsRandomOrder] = useState(false);
   const [displayCoded, setDisplayCoded] = useState(false);
-  const [activeTab, setActiveTab] = useState<'design' | 'analysis' | 'plots'>('design');
+  const [displayUnits, setDisplayUnits] = useState<'coded' | 'uncoded'>('coded');
+  const [activeTab, setActiveTab] = useState<'design' | 'analysis' | 'plots' | 'residuals'>('design');
+  const [visibleMainEffects, setVisibleMainEffects] = useState<string[]>([]);
 
-  // Model Terms State
-  const [selectedTerms, setSelectedTerms] = useState<string[]>(['A', 'B']);
+  // Helper to generate all terms
+  const getAllPossibleTerms = (factorNames: string[]) => {
+    const all = [];
+    const n = factorNames.length;
+    for (let i = 1; i < (1 << n); i++) {
+      const combo = [];
+      for (let j = 0; j < n; j++) {
+        if ((i >> j) & 1) combo.push(factorNames[j]);
+      }
+      if (combo.length > 0) all.push(combo.join('*'));
+    }
+    
+    // Ordered: complexity (main effects first), then alphabetical
+    return all.sort((a, b) => {
+      const complexityA = a.split('*').length;
+      const complexityB = b.split('*').length;
+      if (complexityA !== complexityB) return complexityA - complexityB;
+      return a.localeCompare(b);
+    });
+  };
+
+  useEffect(() => {
+    setVisibleMainEffects(factors.map(f => f.name));
+  }, [factors]);
+
+  // Model Terms State (default to all available terms)
+  const [selectedTerms, setSelectedTerms] = useState<string[]>([]);
+
+  // Sync selected terms when factors change
+  const allAvailableTerms = useMemo(() => getAllPossibleTerms(factors.map(f => f.name)), [factors]);
+
+  // If selectedTerms is empty (initial state), select all. Also reset if available terms change.
+  useEffect(() => {
+    setSelectedTerms(allAvailableTerms);
+  }, [allAvailableTerms]);
+  
+  const handleResetTerms = () => {
+    setSelectedTerms(allAvailableTerms);
+  };
 
   // --- Design Generation ---
   const designMatrix = useMemo(() => {
@@ -42,34 +82,57 @@ export default function DOEModule({ datasets }: { datasets: any[] }) {
   const canAnalyze = responseDataset && responseDataset.values.length >= designMatrix.length;
 
   const analysisResults = useMemo(() => {
-    if (!canAnalyze) return null;
+    if (!canAnalyze || !responseDataset) return null;
     
-    // Simple alignment: use first N values
-    const dataWithResponse = designMatrix.map((run, i) => ({
-      ...run,
-      Response: responseDataset.values[i]
-    }));
+    // Simple alignment: ensure we have numeric response values
+    const dataWithResponse = [];
+    for (let i = 0; i < designMatrix.length; i++) {
+      const val = Number(responseDataset.values[i]);
+      if (isNaN(val)) continue;
+      dataWithResponse.push({
+        ...designMatrix[i],
+        Response: val
+      });
+    }
+
+    if (dataWithResponse.length === 0) return null;
 
     const factorNames = factors.map(f => f.name);
     try {
-      return analyzeDOE(dataWithResponse, 'Response', factorNames, selectedTerms);
+      // Allow saturated models (n == k + 1)
+      const res = analyzeDOE(dataWithResponse, 'Response', factorNames, selectedTerms);
+      
+      if (displayUnits === 'uncoded') {
+        const uncodedCoeffs = getUncodedCoefficients(res, factors);
+        return { ...res, coeffs: uncodedCoeffs };
+      }
+      
+      return { ...res };
     } catch (e) {
-      console.error(e);
+      console.error("DOE Analysis Error:", e);
       return null;
     }
-  }, [canAnalyze, designMatrix, responseDataset, selectedTerms, factors]);
+  }, [canAnalyze, designMatrix, responseDataset, responseDataset?.values, selectedTerms, factors, displayUnits]);
 
   // --- Plots Data ---
-  const mainEffectsData = useMemo(() => {
+  const dataWithResponseMapped = useMemo(() => {
     if (!canAnalyze) return [];
-    const dataWithResponse = designMatrix.map((run, i) => ({
+    return designMatrix.map((run, i) => ({
       ...run,
-      Response: responseDataset.values[i]
-    }));
+      Response: Number(responseDataset.values[i])
+    })).filter(d => !isNaN(d.Response));
+  }, [canAnalyze, designMatrix, responseDataset]);
 
+  const mainEffectsData = useMemo(() => {
+    if (dataWithResponseMapped.length === 0) return [];
+    
     return factors.map(f => {
-      const lowMean = getMean(dataWithResponse.filter(d => d[`${f.name}_coded`] === -1).map(d => d.Response));
-      const highMean = getMean(dataWithResponse.filter(d => d[`${f.name}_coded`] === 1).map(d => d.Response));
+      const lowGroup = dataWithResponseMapped.filter(d => d[`${f.name}_coded`] === -1);
+      const highGroup = dataWithResponseMapped.filter(d => d[`${f.name}_coded`] === 1);
+      
+      const lowMean = lowGroup.length > 0 ? getMean(lowGroup.map(d => d.Response)) : 0;
+      const highMean = highGroup.length > 0 ? getMean(highGroup.map(d => d.Response)) : 0;
+
       return {
         factor: f.name,
         low: lowMean,
@@ -77,22 +140,23 @@ export default function DOEModule({ datasets }: { datasets: any[] }) {
         effect: highMean - lowMean
       };
     });
-  }, [canAnalyze, designMatrix, responseDataset, factors]);
+  }, [dataWithResponseMapped, factors]);
 
   const interactionData = useMemo(() => {
-    if (!canAnalyze || factors.length < 2) return [];
-    const dataWithResponse = designMatrix.map((run, i) => ({
-      ...run,
-      Response: responseDataset.values[i]
-    }));
+    if (dataWithResponseMapped.length === 0 || factors.length < 2) return [];
 
     // For first pair of factors
     const f1 = factors[0].name;
     const f2 = factors[1].name;
 
+    const lowLow = dataWithResponseMapped.filter(d => d[`${f1}_coded`] === -1 && d[`${f2}_coded`] === -1);
+    const lowHigh = dataWithResponseMapped.filter(d => d[`${f1}_coded`] === 1 && d[`${f2}_coded`] === -1);
+    const highLow = dataWithResponseMapped.filter(d => d[`${f1}_coded`] === -1 && d[`${f2}_coded`] === 1);
+    const highHigh = dataWithResponseMapped.filter(d => d[`${f1}_coded`] === 1 && d[`${f2}_coded`] === 1);
+
     const pairs = [
-      { f2Value: 'Low (-1)', f1Low: getMean(dataWithResponse.filter(d => d[`${f1}_coded`] === -1 && d[`${f2}_coded`] === -1).map(d => d.Response)), f1High: getMean(dataWithResponse.filter(d => d[`${f1}_coded`] === 1 && d[`${f2}_coded`] === -1).map(d => d.Response)) },
-      { f2Value: 'High (+1)', f1Low: getMean(dataWithResponse.filter(d => d[`${f1}_coded`] === -1 && d[`${f2}_coded`] === 1).map(d => d.Response)), f1High: getMean(dataWithResponse.filter(d => d[`${f1}_coded`] === 1 && d[`${f2}_coded`] === 1).map(d => d.Response)) }
+      { f2Value: 'Low (-1)', f1Low: lowLow.length > 0 ? getMean(lowLow.map(d => d.Response)) : 0, f1High: lowHigh.length > 0 ? getMean(lowHigh.map(d => d.Response)) : 0 },
+      { f2Value: 'High (+1)', f1Low: highLow.length > 0 ? getMean(highLow.map(d => d.Response)) : 0, f1High: highHigh.length > 0 ? getMean(highHigh.map(d => d.Response)) : 0 }
     ];
 
     return pairs.map(p => ({
@@ -102,7 +166,7 @@ export default function DOEModule({ datasets }: { datasets: any[] }) {
             { x: 1, y: p.f1High }
         ]
     }));
-  }, [canAnalyze, designMatrix, responseDataset, factors]);
+  }, [dataWithResponseMapped, factors]);
 
   // --- Handlers ---
   const addFactor = () => {
@@ -116,9 +180,18 @@ export default function DOEModule({ datasets }: { datasets: any[] }) {
   };
 
   const toggleTerm = (term: string) => {
-    setSelectedTerms(prev => 
-      prev.includes(term) ? prev.filter(t => t !== term) : [...prev, term]
-    );
+    setSelectedTerms(prev => {
+      const exists = prev.includes(term);
+      if (exists) {
+        // If it's a main effect being removed, also remove all terms containing it
+        if (!term.includes('*')) {
+          return prev.filter(t => !t.split('*').includes(term));
+        }
+        return prev.filter(t => t !== term);
+      } else {
+        return [...prev, term];
+      }
+    });
   };
 
   return (
@@ -153,6 +226,12 @@ export default function DOEModule({ datasets }: { datasets: any[] }) {
           >
             <Layout className="w-4 h-4" /> Plots
           </button>
+          <button 
+            onClick={() => setActiveTab('residuals')}
+            className={`px-4 py-1.5 rounded-md text-sm transition-all flex items-center gap-2 ${activeTab === 'residuals' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-200'}`}
+          >
+            <Percent className="w-4 h-4" /> Residuals
+          </button>
         </div>
       </div>
 
@@ -160,6 +239,37 @@ export default function DOEModule({ datasets }: { datasets: any[] }) {
         {/* Left Sidebar - Configuration */}
         <div className="w-80 bg-slate-900/50 border-r border-slate-800 p-4 gap-6 flex flex-col overflow-y-auto">
           
+          <section>
+            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+              <Plus className="w-3 h-3" /> Alpha & Units
+            </h3>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-[10px] text-slate-500 block mb-1">Alpha (α)</label>
+                <select 
+                  className="w-full bg-slate-800 border border-slate-700 rounded p-1.5 text-xs text-white"
+                  value={alpha}
+                  onChange={e => setAlpha(Number(e.target.value))}
+                >
+                  <option value={0.01}>0.01</option>
+                  <option value={0.05}>0.05</option>
+                  <option value={0.10}>0.10</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-[10px] text-slate-500 block mb-1">Units</label>
+                <select 
+                  className="w-full bg-slate-800 border border-slate-700 rounded p-1.5 text-xs text-white"
+                  value={displayUnits}
+                  onChange={e => setDisplayUnits(e.target.value as any)}
+                >
+                  <option value="coded">Coded</option>
+                  <option value="uncoded">Uncoded</option>
+                </select>
+              </div>
+            </div>
+          </section>
+
           <section>
             <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-3 flex items-center gap-2">
               <Settings2 className="w-3 h-3" /> Factor Settings
@@ -173,7 +283,7 @@ export default function DOEModule({ datasets }: { datasets: any[] }) {
                         value={f.name}
                         onChange={e => {
                           const newFactors = [...factors];
-                          newFactors[i].name = e.target.value.toUpperCase().slice(0, 5);
+                          newFactors[i].name = e.target.value.toUpperCase().slice(0, 20);
                           setFactors(newFactors);
                         }}
                       />
@@ -258,14 +368,24 @@ export default function DOEModule({ datasets }: { datasets: any[] }) {
             </h3>
             <div className="space-y-3">
               <select 
-                className="w-full bg-indigo-500/10 border border-indigo-500/30 rounded p-2 text-sm text-indigo-200"
+                className="w-full bg-slate-800 border border-indigo-500/50 rounded p-2 text-sm text-white"
                 value={responseId}
                 onChange={e => setResponseId(e.target.value)}
               >
                 <option value="">Select Response (Y)...</option>
-                {datasets.filter(d => d.isNumeric).map(d => (
-                  <option key={d.id} value={d.id}>{d.name} ({d.values.length} rows)</option>
-                ))}
+                {datasets.filter(d => d.isNumeric).map(d => {
+                  const isMatch = d.values.length === designMatrix.length;
+                  return (
+                    <option 
+                      key={d.id} 
+                      value={d.id} 
+                      className={isMatch ? "text-indigo-400 font-bold bg-slate-900" : "text-slate-500"}
+                      style={{ color: isMatch ? '#818cf8' : '#64748b' }}
+                    >
+                      {isMatch ? '★ ' : ''}{d.name} ({d.values.length} rows)
+                    </option>
+                  );
+                })}
               </select>
               <div className="bg-slate-800/50 p-2 rounded text-[10px] text-slate-400 border border-slate-700 flex items-start gap-2 italic">
                 <Info className="w-3 h-3 shrink-0" />
@@ -275,34 +395,30 @@ export default function DOEModule({ datasets }: { datasets: any[] }) {
           </section>
 
           <section>
-             <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-3 flex items-center gap-2">
-              <Percent className="w-3 h-3" /> Model Refinement
-            </h3>
-            <div className="space-y-1">
-              {factors.map(f => (
-                <label key={f.name} className="flex items-center gap-2 px-2 py-1.5 hover:bg-slate-800 rounded transition-colors cursor-pointer group">
+             <div className="flex justify-between items-center mb-3">
+               <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                 Model Refinement
+               </h3>
+               <button 
+                onClick={handleResetTerms}
+                className="text-[10px] text-indigo-400 hover:text-indigo-300 font-bold"
+               >
+                 SELECT ALL
+               </button>
+             </div>
+            <div className="space-y-1 max-h-60 overflow-y-auto pr-1 custom-scrollbar">
+              {allAvailableTerms.map(term => (
+                <label key={term} className="flex items-center gap-2 px-2 py-1.5 hover:bg-slate-800 rounded transition-colors cursor-pointer group">
                   <input 
                     type="checkbox"
                     className="accent-indigo-500"
-                    checked={selectedTerms.includes(f.name)}
-                    onChange={() => toggleTerm(f.name)}
+                    checked={selectedTerms.includes(term)}
+                    onChange={() => toggleTerm(term)}
                   />
-                  <span className="text-xs text-slate-300 group-hover:text-white">Factor {f.name}</span>
+                  <span className="text-xs text-slate-300 group-hover:text-white">
+                    {term.includes('*') ? term.split('*').join(' × ') : term}
+                  </span>
                 </label>
-              ))}
-              <div className="h-px bg-slate-800 my-2" />
-              {factors.length >= 2 && factors.slice(0, -1).map((f, i) => (
-                factors.slice(i + 1).map(f2 => (
-                  <label key={`${f.name}*${f2.name}`} className="flex items-center gap-2 px-2 py-1.5 hover:bg-slate-800 rounded transition-colors cursor-pointer group">
-                    <input 
-                      type="checkbox"
-                      className="accent-cyan-500"
-                      checked={selectedTerms.includes(`${f.name}*${f2.name}`)}
-                      onChange={() => toggleTerm(`${f.name}*${f2.name}`)}
-                    />
-                    <span className="text-xs text-slate-300 group-hover:text-white">{f.name} × {f2.name}</span>
-                  </label>
-                ))
               ))}
             </div>
           </section>
@@ -319,6 +435,23 @@ export default function DOEModule({ datasets }: { datasets: any[] }) {
                   <p className="text-xs text-slate-500 uppercase tracking-widest font-mono">2^{factors.length} Factorial • {replicates} Reps • {designMatrix.length} Total Runs</p>
                 </div>
                 <div className="flex gap-2">
+                  <button 
+                    onClick={() => {
+                        const headers = ['Std Ord', 'Run Ord', 'Block', ...factors.map(f => f.name), 'Response'];
+                        const rows = designMatrix.map((run, i) => [
+                            i + 1,
+                            run.id,
+                            run.block,
+                            ...factors.map(f => displayCoded ? run[`${f.name}_coded`] : run[f.name]),
+                            responseDataset && responseDataset.values[i] !== undefined ? responseDataset.values[i] : ''
+                        ]);
+                        const tsv = [headers, ...rows].map(row => row.join('\t')).join('\n');
+                        navigator.clipboard.writeText(tsv);
+                    }}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-700 transition-all flex items-center gap-2"
+                  >
+                    Copy to Excel
+                  </button>
                   <button 
                     onClick={() => setIsRandomOrder(!isRandomOrder)}
                     className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 border transition-colors ${isRandomOrder ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'}`}
@@ -400,53 +533,233 @@ export default function DOEModule({ datasets }: { datasets: any[] }) {
                         {(analysisResults?.anova?.model?.p || 0).toFixed(4)}
                       </div>
                     </div>
+                    <div className="bg-slate-900 p-4 rounded-xl border border-slate-800">
+                      <div className="text-[10px] text-slate-500 uppercase tracking-widest font-bold mb-1">Durbin-Watson</div>
+                      <div className="flex items-center gap-4 mt-2">
+                        <div className={`text-2xl font-mono shrink-0 ${(() => {
+                          const dw = analysisResults?.dw || 0;
+                          const diff = Math.abs(dw - 2);
+                          if (diff < 0.4) return 'text-emerald-400';
+                          if (diff < 1.0) return 'text-amber-400';
+                          return 'text-red-500';
+                        })()}`}>
+                          {(analysisResults?.dw || 0).toFixed(2)}
+                        </div>
+                        <div className="flex-1 h-3 bg-slate-800 rounded-sm relative overflow-visible border border-slate-700/50 flex">
+                          <div className="w-[20%] h-full bg-red-600/80 border-r border-black/20" title="0.0 - 0.8 (Positive Correlation)"></div>
+                          <div className="w-[20%] h-full bg-amber-500/80 border-r border-black/20" title="0.8 - 1.6"></div>
+                          <div className="w-[20%] h-full bg-emerald-600/80 border-r border-black/20" title="1.6 - 2.4 (No Autocorrelation)"></div>
+                          <div className="w-[20%] h-full bg-amber-500/80 border-r border-black/20" title="2.4 - 3.2"></div>
+                          <div className="w-[20%] h-full bg-red-600/80" title="3.2 - 4.0 (Negative Correlation)"></div>
+                          
+                          {/* Indicator Marker */}
+                          <div 
+                            className="absolute top-[-4px] bottom-[-4px] w-1 bg-white shadow-[0_0_8px_rgba(255,255,255,0.8)] z-10 transition-all duration-500 rounded-full"
+                            style={{ left: `${Math.min(100, Math.max(0, (analysisResults?.dw || 0) / 4 * 100))}%` }}
+                          />
+                        </div>
+                      </div>
+                      <div className="flex justify-between w-full mt-1 px-1">
+                        <span className="text-[7px] text-slate-600 font-bold">0</span>
+                        <span className="text-[7px] text-slate-500 font-bold bg-slate-800 px-1 rounded">2 (IDEAL)</span>
+                        <span className="text-[7px] text-slate-600 font-bold">4</span>
+                      </div>
+                    </div>
                   </div>
 
-                  <ExportWrapper fileName="doe-pareto">
-                    <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 h-[450px]">
-                       <h3 className="text-sm font-bold text-slate-400 mb-6 uppercase tracking-widest text-center">Pareto Chart of Standardized Effects</h3>
-                       <ResponsiveContainer width="100%" height="100%">
-                         <BarChart 
-                          data={analysisResults?.coeffs.slice(1).sort((a: any, b: any) => Math.abs(b.tStat) - Math.abs(a.tStat)) || []} 
-                          layout="vertical"
-                          margin={{ top: 0, right: 30, left: 40, bottom: 20 }}
-                         >
-                            <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />
-                            <XAxis type="number" stroke="#94a3b8" fontSize={10} name="t-Ratio" />
-                            <YAxis dataKey="name" type="category" stroke="#94a3b8" fontSize={10} width={80} />
-                            <Tooltip cursor={{ fill: '#1e293b' }} contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155' }} />
-                            <ReferenceLine x={2.1} stroke="#ef4444" strokeDasharray="5 5" label={{ position: 'top', value: 'Significance', fill: '#ef4444', fontSize: 10 }} />
-                            <Bar dataKey="tStat" name="t-Value" radius={[0, 4, 4, 0]}>
-                              {analysisResults?.coeffs.slice(1).map((entry: any, index: number) => (
-                                <Cell key={`cell-${index}`} fill={Math.abs(entry.tStat) > 2.1 ? '#818cf8' : '#475569'} />
-                              ))}
-                            </Bar>
-                         </BarChart>
-                       </ResponsiveContainer>
-                    </div>
-                  </ExportWrapper>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <ExportWrapper fileName="doe-pareto-effects">
+                      <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 h-[450px]">
+                        <h3 className="text-sm font-bold text-slate-400 mb-6 uppercase tracking-widest text-center">Pareto Chart of Standardized Effects</h3>
+                        <ResponsiveContainer width="100%" height="90%">
+                          <BarChart 
+                            data={analysisResults?.coeffs.slice(1).map((c: any) => ({
+                              ...c,
+                              absT: Math.abs(c.t),
+                              absEffect: Math.abs(c.effect)
+                            })).sort((a: any, b: any) => {
+                              const valA = analysisResults?.anova?.error?.df > 0 ? a.absT : a.absEffect;
+                              const valB = analysisResults?.anova?.error?.df > 0 ? b.absT : b.absEffect;
+                              return valB - valA;
+                            }) || []} 
+                            layout="vertical"
+                            margin={{ top: 0, right: 30, left: 40, bottom: 20 }}
+                          >
+                              <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />
+                              <XAxis type="number" stroke="#94a3b8" fontSize={10} name="Magnitude" />
+                              <YAxis dataKey="name" type="category" stroke="#94a3b8" fontSize={10} width={80} />
+                              <Tooltip 
+                                cursor={{ fill: '#1e293b' }} 
+                                contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155' }}
+                                formatter={(value: any, name: any) => [Number(value).toFixed(4), 'Magnitude']}
+                              />
+                              {analysisResults?.anova?.error?.df > 0 && !isNaN(jStat.studentt.inv(1 - alpha/2, analysisResults.anova.error.df)) && (
+                                <ReferenceLine 
+                                  x={Math.abs(jStat.studentt.inv(1 - alpha/2, analysisResults.anova.error.df))} 
+                                  stroke="#ef4444" 
+                                  strokeWidth={2}
+                                  strokeDasharray="5 5" 
+                                  label={{ 
+                                    position: 'top', 
+                                    value: `α=${alpha} (t=${Math.abs(jStat.studentt.inv(1 - alpha/2, analysisResults.anova.error.df)).toFixed(2)})`, 
+                                    fill: '#ef4444', 
+                                    fontSize: 10,
+                                    fontWeight: 'bold'
+                                  }} 
+                                />
+                              )}
+                              <Bar dataKey={analysisResults?.anova?.error?.df > 0 ? "absT" : "absEffect"} name="Standardized Effect" radius={[0, 4, 4, 0]}>
+                                {analysisResults?.coeffs.slice(1).map((entry: any, index: number) => {
+                                  const tCrit = analysisResults?.anova?.error?.df > 0 ? Math.abs(jStat.studentt.inv(1 - alpha/2, analysisResults.anova.error.df)) : 2.0;
+                                  const val = analysisResults?.anova?.error?.df > 0 ? Math.abs(entry.t) : Math.abs(entry.effect);
+                                  return <Cell key={`cell-${index}`} fill={val > tCrit ? '#818cf8' : '#475569'} />;
+                                })}
+                              </Bar>
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </ExportWrapper>
+
+                    <ExportWrapper fileName="doe-pareto-ss">
+                      <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 h-[450px]">
+                        <h3 className="text-sm font-bold text-slate-400 mb-6 uppercase tracking-widest text-center text-amber-500/80">Pareto of Adjusted Sum of Squares</h3>
+                        <ResponsiveContainer width="100%" height="90%">
+                          <BarChart 
+                            data={[
+                              ...(analysisResults?.adjustedSS || []),
+                              { term: 'Error', ss: analysisResults?.anova?.error?.ss || 0, isError: true }
+                            ].sort((a, b) => b.ss - a.ss)}
+                            layout="vertical"
+                            margin={{ top: 0, right: 80, left: 40, bottom: 20 }}
+                          >
+                              <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />
+                              <XAxis type="number" stroke="#94a3b8" fontSize={10} hide />
+                              <YAxis dataKey="term" type="category" stroke="#94a3b8" fontSize={10} width={80} />
+                              <Tooltip 
+                                cursor={{ fill: '#1e293b' }} 
+                                contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155' }}
+                                formatter={(value: any) => [Number(value).toFixed(4), 'Adj SS']}
+                              />
+                              <Bar dataKey="ss" name="Adjusted SS" radius={[0, 4, 4, 0]}>
+                                <LabelList 
+                                  dataKey="ss" 
+                                  position="right" 
+                                  content={(props: any) => {
+                                    const { x, y, width, height, value } = props;
+                                    const totalSS = analysisResults?.anova?.total?.ss || 1;
+                                    const pct = ((value / totalSS) * 100).toFixed(1);
+                                    return (
+                                      <text x={x + width + 5} y={y + height / 2 + 4} fill="#94a3b8" fontSize={9} fontWeight="bold">
+                                        {Number(value).toFixed(2)} ({pct}%)
+                                      </text>
+                                    );
+                                  }}
+                                />
+                                {([
+                                  ...(analysisResults?.adjustedSS || []),
+                                  { term: 'Error', ss: analysisResults?.anova?.error?.ss || 0, isError: true }
+                                ].sort((a, b) => b.ss - a.ss)).map((entry: any, index: number) => (
+                                  <Cell key={`cell-ss-${index}`} fill={entry.isError ? '#ef4444' : '#f59e0b'} />
+                                ))}
+                              </Bar>
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </ExportWrapper>
+                  </div>
 
                   <div className="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
+                    <div className="p-3 bg-slate-800/50 border-b border-slate-700 flex justify-between items-center">
+                       <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                         Estimated Effects and Coefficients for Response ({displayUnits} units)
+                       </h4>
+                    </div>
                     <table className="w-full text-left text-xs">
-                      <thead className="bg-slate-800 text-slate-500 uppercase tracking-widest text-[10px]">
+                      <thead className="bg-slate-800/30 text-slate-500 uppercase tracking-widest text-[10px]">
                         <tr>
                           <th className="p-3">Term</th>
+                          <th className="p-3">Effect</th>
                           <th className="p-3">Coef</th>
+                          <th className="p-3">SE Coef</th>
                           <th className="p-3">T-Value</th>
                           <th className="p-3">P-Value</th>
-                          <th className="p-3">Effect (Coded)</th>
                         </tr>
                       </thead>
                       <tbody>
                         {analysisResults?.coeffs.map((c: any) => (
                           <tr key={c.name} className="border-b border-slate-800 hover:bg-slate-800/40">
                             <td className="p-3 font-bold text-slate-200">{c.name}</td>
-                            <td className="p-3 font-mono text-indigo-400">{c.coeff.toFixed(4)}</td>
-                            <td className="p-3 font-mono text-slate-400">{c.tStat.toFixed(2)}</td>
-                            <td className={`p-3 font-mono ${c.pValue < alpha ? 'text-emerald-400 font-bold' : 'text-slate-600'}`}>{c.pValue.toFixed(4)}</td>
-                            <td className="p-3 font-mono text-slate-400">{(c.coeff * 2).toFixed(4)}</td>
+                            <td className={`p-3 font-mono ${c.effect < 0 ? 'text-amber-400' : 'text-cyan-400'}`}>
+                              {c.effect ? c.effect.toFixed(4) : ''}
+                            </td>
+                            <td className={`p-3 font-mono ${c.coeff < 0 ? 'text-amber-300' : 'text-indigo-400'}`}>
+                              {c.coeff.toFixed(4)}
+                            </td>
+                            <td className="p-3 font-mono text-slate-500">{c.se.toFixed(4)}</td>
+                            <td className="p-3 font-mono text-slate-400">{c.t.toFixed(2)}</td>
+                            <td className={`p-3 font-mono ${c.p < alpha ? 'text-emerald-400 font-bold' : 'text-slate-600'}`}>{c.p.toFixed(4)}</td>
                           </tr>
                         ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden shadow-xl mt-6">
+                    <div className="p-3 bg-slate-800/50 border-b border-slate-700 flex justify-between items-center">
+                       <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                         Analysis of Variance (ANOVA)
+                       </h4>
+                    </div>
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-800/30 text-slate-500 uppercase tracking-widest text-[10px]">
+                        <tr>
+                          <th className="p-3">Source</th>
+                          <th className="p-3 text-center">DF</th>
+                          <th className="p-3 text-center">Adj SS</th>
+                          <th className="p-3 text-center">Adj MS</th>
+                          <th className="p-3 text-center">F-Value</th>
+                          <th className="p-3 text-center">P-Value</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {/* Model */}
+                        <tr className="border-b border-slate-800 bg-indigo-500/5">
+                           <td className="p-3 font-bold text-white">Model</td>
+                           <td className="p-3 text-center text-slate-300">{analysisResults.anova.model.df}</td>
+                           <td className="p-3 text-center text-cyan-400">{analysisResults.anova.model.ss.toFixed(4)}</td>
+                           <td className="p-3 text-center text-indigo-400">{analysisResults.anova.model.ms.toFixed(4)}</td>
+                           <td className="p-3 text-center text-slate-200">{analysisResults.anova.model.f.toFixed(2)}</td>
+                           <td className={`p-3 text-center font-bold ${analysisResults.anova.model.p < alpha ? 'text-emerald-400' : 'text-slate-500'}`}>{analysisResults.anova.model.p.toFixed(4)}</td>
+                        </tr>
+                        {/* Term-level Adj SS */}
+                        {analysisResults.adjustedSS?.map((term: any) => (
+                           <tr key={`adj-${term.term}`} className="border-b border-slate-800/50 text-[10px]">
+                             <td className="p-2 pl-6 text-slate-400 italic">{term.term}</td>
+                             <td className="p-2 text-center text-slate-500">1</td>
+                             <td className="p-2 text-center text-slate-400">{term.ss.toFixed(4)}</td>
+                             <td className="p-2 text-center text-slate-400">{term.ss.toFixed(4)}</td>
+                             <td className="p-2 text-center">—</td>
+                             <td className="p-2 text-center">—</td>
+                           </tr>
+                        ))}
+                        {/* Error */}
+                        <tr className="border-b border-slate-800">
+                           <td className="p-3 font-bold text-slate-400">Error</td>
+                           <td className="p-3 text-center text-slate-300">{analysisResults.anova.error.df}</td>
+                           <td className="p-3 text-center text-slate-400">{analysisResults.anova.error.ss.toFixed(4)}</td>
+                           <td className="p-3 text-center text-slate-400">{analysisResults.anova.error.ms.toFixed(4)}</td>
+                           <td className="p-3 text-center">—</td>
+                           <td className="p-3 text-center">—</td>
+                        </tr>
+                        {/* Total */}
+                        <tr className="font-bold bg-slate-900">
+                           <td className="p-3 text-slate-300">Total</td>
+                           <td className="p-3 text-center text-slate-300">{analysisResults.anova.total.df}</td>
+                           <td className="p-3 text-center text-slate-300">{analysisResults.anova.total.ss.toFixed(4)}</td>
+                           <td className="p-3 text-center">—</td>
+                           <td className="p-3 text-center">—</td>
+                           <td className="p-3 text-center">—</td>
+                        </tr>
                       </tbody>
                     </table>
                   </div>
@@ -457,6 +770,21 @@ export default function DOEModule({ datasets }: { datasets: any[] }) {
 
           {activeTab === 'plots' && (
             <div className="space-y-6">
+              <div className="flex bg-slate-900 p-3 rounded-xl border border-slate-800 gap-4 overflow-x-auto items-center">
+                <span className="text-[10px] font-bold text-slate-500 uppercase whitespace-nowrap">Show Main Effects:</span>
+                {factors.map(f => (
+                  <label key={f.name} className="flex items-center gap-2 px-2 py-1 bg-slate-800 rounded border border-slate-700 cursor-pointer hover:bg-slate-700 transition-colors">
+                    <input 
+                      type="checkbox" 
+                      className="accent-indigo-500"
+                      checked={visibleMainEffects.includes(f.name)}
+                      onChange={() => setVisibleMainEffects(prev => prev.includes(f.name) ? prev.filter(v => v !== f.name) : [...prev, f.name])}
+                    />
+                    <span className="text-xs text-slate-300 font-medium">{f.name}</span>
+                  </label>
+                ))}
+              </div>
+
               {!canAnalyze ? (
                  <div className="bg-slate-900/50 border border-slate-800 rounded-2xl h-80 flex flex-col items-center justify-center p-10 text-center">
                     <div className="p-4 bg-slate-800 rounded-full mb-4">
@@ -466,14 +794,24 @@ export default function DOEModule({ datasets }: { datasets: any[] }) {
                     <p className="text-slate-500 text-sm max-w-xs">Main Effects and Interaction plots will generated automatically from the response variable.</p>
                  </div>
               ) : (
-                <>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 h-[400px]">
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                    <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 h-[450px]">
                       <h3 className="text-sm font-bold text-slate-400 mb-6 uppercase tracking-widest text-center">Main Effects Plot for Response</h3>
                       <ResponsiveContainer width="100%" height="85%">
-                        <LineChart data={mainEffectsData} margin={{ top: 20, right: 40, left: 20, bottom: 20 }}>
+                        <LineChart 
+                          data={[{x: -1}, {x: 1}]} 
+                          margin={{ top: 20, right: 40, left: 20, bottom: 20 }}
+                        >
                           <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                          <XAxis dataKey="factor" tick={false} stroke="#94a3b8" label={{ value: 'Factors', position: 'insideBottom', offset: -10, fill: '#94a3b8' }} />
+                          <XAxis 
+                            dataKey="x"
+                            type="number"
+                            domain={[-1.2, 1.2]}
+                            ticks={[-1, 1]}
+                            tickFormatter={(v) => Number(v) === -1 ? 'Low' : 'High'}
+                            stroke="#94a3b8" 
+                            fontSize={10}
+                          />
                           <YAxis stroke="#94a3b8" fontSize={10} domain={['auto', 'auto']} />
                           <Tooltip 
                             content={({ payload }) => {
@@ -482,66 +820,172 @@ export default function DOEModule({ datasets }: { datasets: any[] }) {
                               return (
                                 <div className="bg-slate-900 border border-slate-700 p-2 rounded shadow-xl text-[10px]">
                                   <div className="font-bold text-indigo-400 mb-1">Factor {d.factor}</div>
-                                  <div className="text-slate-400">Low Mean: <span className="text-white">{d.low.toFixed(2)}</span></div>
-                                  <div className="text-slate-400">High Mean: <span className="text-white">{d.high.toFixed(2)}</span></div>
-                                  <div className="text-slate-200 mt-1 pt-1 border-t border-slate-700">Total Effect: <span className={d.effect > 0 ? 'text-emerald-400' : 'text-rose-400'}>{d.effect.toFixed(2)}</span></div>
+                                  <div className="text-slate-400">Value: <span className="text-white">{d.y.toFixed(2)}</span></div>
                                 </div>
                               );
                             }}
                           />
-                          {mainEffectsData.map((d, i) => (
+                          <Legend wrapperStyle={{ fontSize: '10px', paddingTop: '10px' }} />
+                          {mainEffectsData.filter(d => visibleMainEffects.includes(d.factor)).map((d, i) => (
                              <Line 
                               key={d.factor} 
+                              name={`Factor ${d.factor}`}
                               type="monotone" 
                               data={[
                                 { factor: d.factor, x: -1, y: d.low },
                                 { factor: d.factor, x: 1, y: d.high }
                               ]} 
                               dataKey="y"
-                              stroke={i % 2 === 0 ? '#6366f1' : '#14b8a6'} 
+                              stroke={['#6366f1', '#14b8a6', '#f59e0b', '#ec4899', '#8b5cf6', '#06b6d4', '#f97316'][i % 7]} 
                               strokeWidth={3}
-                              dot={{ r: 4, strokeWidth: 2, fill: '#1e293b' }}
+                              dot={{ r: 5, strokeWidth: 2, fill: '#1e293b' }}
                             />
                           ))}
                         </LineChart>
                       </ResponsiveContainer>
                     </div>
 
-                    <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 h-[400px]">
-                      <h3 className="text-sm font-bold text-slate-400 mb-2 uppercase tracking-widest text-center">Interaction Plot</h3>
-                      <p className="text-[10px] text-center text-slate-600 mb-4 italic">Comparison of {factors[0]?.name} vs {factors[1]?.name}</p>
-                      <ResponsiveContainer width="100%" height="80%">
-                        <LineChart margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                          <XAxis 
-                            type="number" 
-                            domain={[-1.5, 1.5]} 
-                            ticks={[-1, 1]} 
-                            stroke="#94a3b8" 
-                            fontSize={10}
-                            tickFormatter={(v) => v === -1 ? 'Low' : 'High'}
-                            label={{ value: factors[0]?.name, position: 'insideBottom', offset: -10, fill: '#94a3b8' }}
-                          />
-                          <YAxis stroke="#94a3b8" fontSize={10} domain={['auto', 'auto']} />
-                          <Legend verticalAlign="top" height={36} wrapperStyle={{ fontSize: '10px' }} />
-                          {interactionData.map((trace, i) => (
-                             <Line 
-                                key={trace.f2Value}
-                                data={trace.data} 
-                                type="monotone" 
-                                dataKey="y" 
-                                name={`${factors[1]?.name}: ${trace.f2Value}`}
-                                stroke={i % 2 === 0 ? '#6366f1' : '#f59e0b'}
-                                strokeWidth={2}
-                                dot={{ r: 4 }}
-                             />
-                          ))}
-                        </LineChart>
-                      </ResponsiveContainer>
+                    <div className="bg-slate-900 p-6 rounded-xl border border-slate-800">
+                      <h3 className="text-sm font-bold text-slate-400 mb-6 uppercase tracking-widest text-center">Interaction Matrix</h3>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 h-[400px] overflow-y-auto pr-2 custom-scrollbar">
+                         {selectedTerms.filter(term => term.includes('*') && term.split('*').length === 2).length > 0 ? (
+                           selectedTerms.filter(term => term.includes('*') && term.split('*').length === 2).map(term => {
+                                const [f1Name, f2Name] = term.split('*');
+                                const f1 = factors.find(f => f.name === f1Name) || { name: f1Name };
+                                const f2 = factors.find(f => f.name === f2Name) || { name: f2Name };
+                                
+                                const lowLow = dataWithResponseMapped.filter(d => d[`${f1.name}_coded`] === -1 && d[`${f2.name}_coded`] === -1);
+                                const lowHigh = dataWithResponseMapped.filter(d => d[`${f1.name}_coded`] === 1 && d[`${f2.name}_coded`] === -1);
+                                const highLow = dataWithResponseMapped.filter(d => d[`${f1.name}_coded`] === -1 && d[`${f2.name}_coded`] === 1);
+                                const highHigh = dataWithResponseMapped.filter(d => d[`${f1.name}_coded`] === 1 && d[`${f2.name}_coded`] === 1);
+
+                                const iData = [
+                                  { name: 'Low', f1Low: lowLow.length > 0 ? getMean(lowLow.map(d => d.Response)) : 0, f1High: lowHigh.length > 0 ? getMean(lowHigh.map(d => d.Response)) : 0 },
+                                  { name: 'High', f1Low: highLow.length > 0 ? getMean(highLow.map(d => d.Response)) : 0, f1High: highHigh.length > 0 ? getMean(highHigh.map(d => d.Response)) : 0 }
+                                ];
+
+                                return (
+                                  <div key={term} className="bg-slate-800/40 p-3 rounded border border-slate-700/50 shadow-inner">
+                                     <div className="text-[10px] font-bold text-slate-300 mb-2 flex justify-between">
+                                        <span>{term}</span>
+                                        <div className="flex gap-2">
+                                          <span className="flex items-center gap-1 text-[8px]"><span className="w-2 h-0.5 bg-indigo-500"></span> {f1.name} Low</span>
+                                          <span className="flex items-center gap-1 text-[8px]"><span className="w-2 h-0.5 bg-amber-500 border-t border-dashed"></span> {f1.name} High</span>
+                                        </div>
+                                     </div>
+                                     <div className="h-44">
+                                       <ResponsiveContainer width="100%" height="100%">
+                                         <LineChart margin={{ top: 5, right: 20, left: -20, bottom: 20 }}>
+                                            <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                                            <XAxis dataKey="name" fontSize={9} stroke="#94a3b8" label={{ value: f2.name, position: 'insideBottom', offset: -5, fontSize: 8, fill: '#64748b' }} />
+                                            <YAxis fontSize={9} stroke="#94a3b8" domain={['auto', 'auto']} />
+                                            <Tooltip contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', fontSize: '10px' }} />
+                                            <Line name={`${f1.name} Low`} dataKey="f1Low" stroke="#6366f1" strokeWidth={2} dot={{ r: 4 }} />
+                                            <Line name={`${f1.name} High`} dataKey="f1High" stroke="#f59e0b" strokeWidth={2} dot={{ r: 4 }} strokeDasharray="5 5" />
+                                         </LineChart>
+                                       </ResponsiveContainer>
+                                     </div>
+                                  </div>
+                                );
+                           })
+                         ) : (
+                           <div className="col-span-full h-full flex flex-col items-center justify-center text-slate-600 text-xs italic p-10 bg-slate-900/50 rounded-lg">
+                             <Layout className="w-5 h-5 mb-2 opacity-20" />
+                             No 2-way interactions selected in Model Refinement
+                           </div>
+                         )}
+                      </div>
+                    </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'residuals' && (
+            <div className="space-y-6">
+               {!canAnalyze ? (
+                 <div className="bg-slate-900/50 border border-slate-800 rounded-2xl h-80 flex flex-col items-center justify-center p-10 text-center">
+                    <div className="p-4 bg-slate-800 rounded-full mb-4">
+                      <Percent className="w-8 h-8 text-slate-600" />
+                    </div>
+                    <h3 className="text-slate-300 font-bold mb-2">Residual Analysis</h3>
+                    <p className="text-slate-500 text-sm max-w-xs">Residual diagnostics will appear once a response variable is selected and the model is fit.</p>
+                 </div>
+               ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* Normal Probability Plot */}
+                  <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 h-[350px]">
+                    <h3 className="text-sm font-bold text-slate-400 mb-6 uppercase tracking-widest text-center">Normal Probability Plot</h3>
+                    <ResponsiveContainer width="100%" height="80%">
+                      <LineChart data={analysisResults?.probPlot} margin={{ top: 10, right: 30, left: 10, bottom: 20 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                        <XAxis type="number" dataKey="theoretical" stroke="#94a3b8" fontSize={10} name="Theoretical" label={{ value: 'Theoretical', position: 'insideBottom', offset: -5, fill: '#94a3b8', fontSize: 10 }} />
+                        <YAxis type="number" dataKey="observed" stroke="#94a3b8" fontSize={10} name="Observed" />
+                        <Tooltip contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155' }} />
+                        <Line type="linear" dataKey="observed" stroke="#818cf8" strokeWidth={0} dot={{ r: 3, fill: '#818cf8' }} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  {/* Versus Order */}
+                  <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 h-[350px]">
+                    <h3 className="text-sm font-bold text-slate-400 mb-6 uppercase tracking-widest text-center">Residuals vs Run Order</h3>
+                    <ResponsiveContainer width="100%" height="80%">
+                      <LineChart data={analysisResults?.residuals} margin={{ top: 10, right: 30, left: 10, bottom: 20 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                        <XAxis dataKey="order" stroke="#94a3b8" fontSize={10} label={{ value: 'Run Order', position: 'insideBottom', offset: -5, fill: '#94a3b8', fontSize: 10 }} />
+                        <YAxis stroke="#94a3b8" fontSize={10} />
+                        <Tooltip contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155' }} />
+                        <ReferenceLine y={0} stroke="#475569" strokeWidth={2} />
+                        <Line type="monotone" dataKey="value" stroke="#ec4899" strokeWidth={2} dot={{ r: 4, fill: '#ec4899' }} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  {/* Versus Fits */}
+                  <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 h-[350px]">
+                    <h3 className="text-sm font-bold text-slate-400 mb-6 uppercase tracking-widest text-center">Residuals vs Fits</h3>
+                    <ResponsiveContainer width="100%" height="80%">
+                      <LineChart data={analysisResults?.residuals} margin={{ top: 10, right: 30, left: 10, bottom: 20 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                        <XAxis type="number" dataKey="fitted" stroke="#94a3b8" fontSize={10} domain={['auto', 'auto']} label={{ value: 'Fitted Value', position: 'insideBottom', offset: -5, fill: '#94a3b8', fontSize: 10 }} />
+                        <YAxis stroke="#94a3b8" fontSize={10} />
+                        <Tooltip contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155' }} />
+                        <ReferenceLine y={0} stroke="#475569" strokeWidth={2} />
+                        <Line type="linear" dataKey="value" stroke="#f59e0b" strokeWidth={0} dot={{ r: 3, fill: '#f59e0b' }} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  {/* Versus Factor Levels (Dynamic Factor-X plot) */}
+                  <div className="col-span-full bg-slate-900 p-6 rounded-xl border border-slate-800 min-h-[350px]">
+                    <h3 className="text-sm font-bold text-slate-400 mb-6 uppercase tracking-widest text-center">Residuals vs Factors</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                      {factors.map(f => {
+                        const factorResidData = analysisResults?.residuals.map((r: any, idx: number) => ({
+                           level: dataWithResponseMapped[idx][f.name],
+                           value: r.value
+                        }));
+
+                        return (
+                          <div key={f.name} className="h-48">
+                            <div className="text-[10px] font-bold text-slate-600 mb-2 uppercase text-center">{f.name}</div>
+                            <ResponsiveContainer width="100%" height="90%">
+                              <LineChart data={factorResidData}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                                <XAxis dataKey="level" stroke="#475569" fontSize={8} />
+                                <YAxis stroke="#475569" fontSize={8} />
+                                <ReferenceLine y={0} stroke="#475569" />
+                                <Line type="linear" dataKey="value" stroke="#14b8a6" strokeWidth={0} dot={{ r: 3, fill: '#14b8a6' }} />
+                              </LineChart>
+                            </ResponsiveContainer>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
-                </>
-              )}
+                </div>
+               )}
             </div>
           )}
         </div>

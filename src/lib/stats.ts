@@ -25,6 +25,16 @@ export function getPercentile(data: number[], p: number): number {
   return sorted[lower] + fraction * (sorted[lower + 1] - sorted[lower]);
 }
 
+// Lenth's Method PSE calculation
+function calculateLenthPSE(effects: number[]) {
+  const absEffects = effects.map(Math.abs);
+  const s0 = 1.5 * jStat.median(absEffects);
+  const filteredEffects = absEffects.filter(e => e < 2.5 * s0);
+  if (filteredEffects.length === 0) return s0;
+  const pse = 1.5 * jStat.median(filteredEffects);
+  return pse;
+}
+
 // --- Process Capability Engine ---
 export function analyzeCapability(params: any) {
   const { data, usl, lsl, target, isLslBoundary, isUslBoundary, subgroupType, subgroupSize, subgroupIds } = params;
@@ -148,7 +158,7 @@ export function runMultipleRegression(yData: number[], xDataMatrix: number[][], 
   const n = yData.length;
   const k = xDataMatrix.length; // Number of predictors
   
-  if (n <= k + 1) return null;
+  if (n < k + 1) return null;
 
   // Build X matrix with intercept column
   const X = [];
@@ -179,16 +189,48 @@ export function runMultipleRegression(yData: number[], xDataMatrix: number[][], 
   const betaMat = math.multiply(XtX_inv, XtY);
   const beta = (betaMat as any).toArray ? (betaMat as any).toArray() : betaMat;
 
-  // Predictions & Residuals
-  const Y_hat_mat = math.multiply(X, beta);
+  // Predicted values = X * beta
+  const Y_hat_mat = math.multiply(X, betaMat);
   const Y_hat = (Y_hat_mat as any).toArray ? (Y_hat_mat as any).toArray() : Y_hat_mat;
   const residuals = yData.map((y, i) => y - Y_hat[i][0]);
+
+  // Adjusted Sum of Squares (Type III)
+  const adjustedSS: { term: string, ss: number }[] = [];
+  if (k > 0) {
+    for (let i = 0; i < k; i++) {
+        // Model excluding predictor i
+        const subX = X.map(row => {
+            const newRow = [...row];
+            newRow.splice(i + 1, 1);
+            return newRow;
+        });
+        const subXt = math.transpose(subX);
+        const subXtX = math.multiply(subXt, subX);
+        try {
+            const subInv = math.inv(subXtX);
+            const subXtY = math.multiply(subXt, Y);
+            const subBeta = math.multiply(subInv, subXtY);
+            const subYhat = math.multiply(subX, subBeta);
+            const subYhatArr = (subYhat as any).toArray ? (subYhat as any).toArray() : subYhat;
+            
+            const subSSE = yData.reduce((acc, y, idx) => acc + Math.pow(y - subYhatArr[idx][0], 2), 0);
+            const currentSSE = residuals.reduce((acc, r) => acc + Math.pow(r, 2), 0);
+            
+            adjustedSS.push({
+                term: xNames[i],
+                ss: Math.max(0, subSSE - currentSSE)
+            });
+        } catch (e) {
+            adjustedSS.push({ term: xNames[i], ss: 0 });
+        }
+    }
+  }
 
   // SSE, SSR, SST
   const yMean = getMean(yData);
   const sst = yData.reduce((acc, y) => acc + Math.pow(y - yMean, 2), 0);
   const sse = residuals.reduce((acc, r) => acc + Math.pow(r, 2), 0);
-  const ssr = sst - sse;
+  const ssr = Math.max(0, sst - sse);
 
   // Degrees of Freedom
   const dfTotal = n - 1;
@@ -197,20 +239,35 @@ export function runMultipleRegression(yData: number[], xDataMatrix: number[][], 
 
   // Mean Squares
   const msModel = ssr / dfModel;
-  const msError = sse / dfError;
-  const s = Math.sqrt(msError);
+  const msError = dfError > 0 ? sse / dfError : 0;
+  
+  // Standard Error of Regression (S)
+  let s = Math.sqrt(msError);
+  
+  // Lenth's Method for saturated models (dfError = 0)
+  let lenthPSE = 0;
+  let dfLenth = 0;
+  const isSaturated = dfError <= 0;
+  
+  if (isSaturated && k > 0) {
+    const effects = [];
+    for (let j = 1; j <= k; j++) effects.push(beta[j][0] * 2);
+    lenthPSE = calculateLenthPSE(effects);
+    dfLenth = k / 3;
+    s = lenthPSE; // Use PSE as the error estimate
+  }
 
   // F-statistic
-  const fStat = msError === 0 ? 0 : msModel / msError;
-  const pValueModel = 1 - jStat.centralF.cdf(fStat, dfModel, dfError);
+  const fStat = (msError === 0 || dfError <= 0) ? 0 : msModel / msError;
+  const pValueModel = dfError > 0 ? 1 - jStat.centralF.cdf(fStat, dfModel, dfError) : 1;
 
   // R-squared
-  const rSq = ssr / sst;
-  const rSqAdj = 1 - ((1 - rSq) * (n - 1)) / (n - k - 1);
+  const rSq = sst === 0 ? 0 : ssr / sst;
+  const rSqAdj = dfError > 0 ? 1 - ((1 - rSq) * (n - 1)) / (n - k - 1) : rSq;
 
   // VIF & Tolerance
   const vif: number[] = [];
-  if (calculateVIF && k > 1) {
+  if (calculateVIF && k > 1 && n > k + 1) {
     for (let j = 0; j < k; j++) {
       // Regress Xj against other X's
       const y_vif = xDataMatrix[j];
@@ -236,21 +293,56 @@ export function runMultipleRegression(yData: number[], xDataMatrix: number[][], 
   // Standard Errors of Coefficients
   // SE(beta_j) = sqrt(MSE * (X'X)^-1_jj)
   const coeffs = [];
+  const effectiveErrorMS = isSaturated ? Math.pow(lenthPSE / 2, 2) : msError;
+  const effectiveDF = isSaturated ? dfLenth : dfError;
+
   for (let j = 0; j <= k; j++) {
     const b = beta[j][0];
-    const se = Math.sqrt(msError * (XtX_inv as any)[j][j]);
-    const t = se === 0 ? 0 : b / se;
-    const p = 2 * (1 - jStat.studentt.cdf(Math.abs(t), dfError));
+    const varB = effectiveErrorMS * (XtX_inv as any)[j][j];
+    const se = varB > 0 ? Math.sqrt(varB) : (isSaturated && j > 0 ? lenthPSE / 2 : 0);
+    const t = (se === 0 || effectiveDF <= 0) ? 0 : b / se;
+    const p = effectiveDF > 0 ? 2 * (1 - jStat.studentt.cdf(Math.abs(t), effectiveDF)) : 1;
     
     coeffs.push({
       term: j === 0 ? 'Constant' : xNames[j - 1],
+      name: j === 0 ? 'Constant' : xNames[j - 1], // For Pareto chart
       coeff: b,
+      effect: j === 0 ? null : b * 2,
       se,
       t,
       p,
       vif: j === 0 ? null : (vif[j - 1] || 1),
       tolerance: j === 0 ? null : (1 / (vif[j-1] || 1))
     });
+  }
+
+  // Sequential SS (Type I)
+  const sequentialSS: { term: string, ss: number }[] = [];
+  if (k > 0) {
+    let lastSSR = 0;
+    for (let i = 1; i <= k; i++) {
+        const subX = X.map(row => row.slice(0, i + 1));
+        const subXt = math.transpose(subX);
+        const subXtX = math.multiply(subXt, subX);
+        try {
+            const subInv = math.inv(subXtX);
+            const subXtY = math.multiply(subXt, Y);
+            const subBeta = math.multiply(subInv, subXtY);
+            const subYhat = math.multiply(subX, subBeta);
+            const subYhatArr = (subYhat as any).toArray ? (subYhat as any).toArray() : subYhat;
+            
+            const currentSSE = yData.reduce((acc, y, idx) => acc + Math.pow(y - subYhatArr[idx][0], 2), 0);
+            const currentSSR = sst - currentSSE;
+            
+            sequentialSS.push({
+                term: xNames[i - 1],
+                ss: Math.max(0, currentSSR - lastSSR)
+            });
+            lastSSR = currentSSR;
+        } catch (e) {
+            sequentialSS.push({ term: xNames[i - 1], ss: 0 });
+        }
+    }
   }
 
   // Durbin-Watson Statistic
@@ -264,8 +356,8 @@ export function runMultipleRegression(yData: number[], xDataMatrix: number[][], 
   // Normal Probability Plot Calculation
   const sortedResiduals = [...residuals].sort((a, b) => a - b);
   const probPlot = sortedResiduals.map((val, i) => {
-    const p = (i + 1 - 0.375) / (n + 0.25);
-    const theoreticalZ = jStat.normal.inv(p, 0, 1);
+    const pVal = (i + 1 - 0.375) / (n + 0.25);
+    const theoreticalZ = jStat.normal.inv(pVal, 0, 1);
     return { observed: val, theoretical: theoreticalZ };
   });
 
@@ -276,19 +368,49 @@ export function runMultipleRegression(yData: number[], xDataMatrix: number[][], 
     s,
     anova: {
       model: { df: dfModel, ss: ssr, ms: msModel, f: fStat, p: pValueModel },
-      error: { df: dfError, ss: sse, ms: msError },
+      error: { df: Math.max(0, dfError), ss: sse, ms: msError },
       total: { df: dfTotal, ss: sst }
     },
+    sequentialSS,
+    adjustedSS,
     dw,
     probPlot,
     residuals: residuals.map((r, i) => ({
       order: i + 1,
-      res: r,
-      fit: Y_hat[i][0],
+      value: r,
+      fitted: Y_hat[i][0],
       // Z-residual
       z: s === 0 ? 0 : r / s
     }))
   };
+}
+
+/**
+ * Transforms coded coefficients to uncoded units.
+ * For a 2^k design, uncoded = coded * (ResponseRange / FactorRange)
+ */
+export function getUncodedCoefficients(codedResults: any, factors: { name: string, low: number, high: number }[]) {
+  if (!codedResults) return null;
+
+  return codedResults.coeffs.map((c: any) => {
+    if (c.name === 'Constant') return { ...c };
+    
+    const parts = c.name.split('*');
+    let divisor = 1;
+    parts.forEach((p: string) => {
+      const f = factors.find(fact => fact.name === p);
+      if (f) {
+        divisor *= (f.high - f.low) / 2;
+      }
+    });
+
+    return {
+      ...c,
+      coeff: c.coeff / divisor,
+      se: (c.se || 0) / divisor,
+      effect: c.effect ? c.effect / divisor : null
+    };
+  });
 }
 
 // --- Dynamic Visual Generators ---
@@ -505,10 +627,10 @@ export function generateFactorialDesign(factors: { name: string, low: number, hi
         
         factors.forEach((f, fIdx) => {
             // Standard order: Column J toggles every 2^J runs
-            const bit = (Math.floor(i / Math.pow(2, fIdx))) % 2;
+            const bit = Math.floor(i / Math.pow(2, fIdx)) % 2;
             const coded = bit === 0 ? -1 : 1;
             run[`${f.name}_coded`] = coded;
-            run[f.name] = coded === -1 ? f.low : f.high;
+            run[f.name] = coded === -1 ? Number(f.low) : Number(f.high);
         });
         
         design.push(run);
@@ -521,20 +643,20 @@ export function generateFactorialDesign(factors: { name: string, low: number, hi
 export function analyzeDOE(data: any[], responseKey: string, factors: string[], terms: string[]) {
     // Construct X matrix based on terms (Main effects and Interactions)
     const y = data.map(d => Number(d[responseKey]));
-    const X = data.map(d => {
-        const row: number[] = [1]; // Intercept
-        terms.forEach(term => {
+    
+    // We need an array of columns (predictors only)
+    const xColumns = terms.map(term => {
+        return data.map(d => {
             const parts = term.split('*');
             let val = 1;
             parts.forEach(p => {
-                val *= d[`${p}_coded`];
+                val *= d[`${p}_coded` || p]; // Fallback to p if coded not found
             });
-            row.push(val);
+            return val;
         });
-        return row;
     });
 
-    return runMultipleRegression(y, X, ['Intercept', ...terms]);
+    return runMultipleRegression(y, xColumns, terms);
 }
 
 export function generateQQData(data: number[]) {
