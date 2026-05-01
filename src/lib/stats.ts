@@ -485,6 +485,58 @@ export function sampleData<T>(data: T[], maxPoints: number = 3000): T[] {
   return sampled;
 }
 
+/**
+ * Generates a 2^k full factorial design matrix
+ */
+export function generateFactorialDesign(factors: { name: string, low: number, high: number }[], replicates: number = 1, blocks: number = 1) {
+  const k = factors.length;
+  const baseRuns = Math.pow(2, k);
+  const totalRunsPerRep = baseRuns;
+  
+  let design = [];
+  
+  for (let r = 0; r < replicates; r++) {
+    for (let i = 0; i < baseRuns; i++) {
+        const run: any = { 
+            id: r * baseRuns + i + 1,
+            replicate: r + 1,
+            block: Math.floor(i / (baseRuns / blocks)) + 1 // Simple blocking
+        };
+        
+        factors.forEach((f, fIdx) => {
+            // Standard order: Column J toggles every 2^J runs
+            const bit = (Math.floor(i / Math.pow(2, fIdx))) % 2;
+            const coded = bit === 0 ? -1 : 1;
+            run[`${f.name}_coded`] = coded;
+            run[f.name] = coded === -1 ? f.low : f.high;
+        });
+        
+        design.push(run);
+    }
+  }
+  
+  return design;
+}
+
+export function analyzeDOE(data: any[], responseKey: string, factors: string[], terms: string[]) {
+    // Construct X matrix based on terms (Main effects and Interactions)
+    const y = data.map(d => Number(d[responseKey]));
+    const X = data.map(d => {
+        const row: number[] = [1]; // Intercept
+        terms.forEach(term => {
+            const parts = term.split('*');
+            let val = 1;
+            parts.forEach(p => {
+                val *= d[`${p}_coded`];
+            });
+            row.push(val);
+        });
+        return row;
+    });
+
+    return runMultipleRegression(y, X, ['Intercept', ...terms]);
+}
+
 export function generateQQData(data: number[]) {
   if (data.length < 2) return [];
   const sorted = [...data].sort((a, b) => a - b);
