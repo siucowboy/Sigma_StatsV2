@@ -33,12 +33,34 @@ export default function CapabilityModule({ datasets }: { datasets: any[] }) {
 
   // Subgroup configuration
   const [subgroupType, setSubgroupType] = useState<'fixed' | 'variable'>('fixed');
-  const [fixedSubgroupSize, setFixedSubgroupSize] = useState<number>(1); // Default to 1 (Individuals)
+  const [fixedSubgroupSize, setFixedSubgroupSize] = useState<number>(1);
   const [subgroupIdColumn, setSubgroupIdColumn] = useState<string>('');
+  const [analysisIntent, setAnalysisIntent] = useState<'overall' | 'shortTerm' | 'both'>('shortTerm');
 
   // --- Derived Data & Calculations ---
   const activeDataset = datasets.find(d => d.id === selectedDataId);
   const rawData = activeDataset?.values || [];
+
+  // Default subgroup size to total on data selection
+  React.useEffect(() => {
+    if (rawData.length > 0) {
+      setFixedSubgroupSize(rawData.length);
+      setAnalysisIntent('shortTerm');
+    }
+  }, [selectedDataId, rawData.length]);
+
+  // Auto-switch to Comprehensive if rational subgroups are detected
+  React.useEffect(() => {
+    if (rawData.length > 0) {
+      const isUsingSubgroups = 
+        (subgroupType === 'fixed' && fixedSubgroupSize > 0 && fixedSubgroupSize < rawData.length) ||
+        (subgroupType === 'variable' && subgroupIdColumn !== '');
+      
+      if (isUsingSubgroups) {
+        setAnalysisIntent('both');
+      }
+    }
+  }, [fixedSubgroupSize, subgroupType, subgroupIdColumn, rawData.length]);
 
   const analysisParams = {
     data: rawData,
@@ -96,6 +118,33 @@ export default function CapabilityModule({ datasets }: { datasets: any[] }) {
               <option value="">Select Primary Dataset...</option>
               {datasets.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
             </select>
+          </div>
+
+          <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
+            <h3 className="font-semibold mb-4 text-neon-accent">Analysis Profile</h3>
+            <div className="flex flex-col gap-2">
+              <button 
+                onClick={() => setAnalysisIntent('both')}
+                className={`text-xs p-2 rounded text-left transition-colors ${analysisIntent === 'both' ? 'bg-sky-500/20 text-sky-400 border border-sky-500/50' : 'bg-slate-900 text-slate-400 border border-transparent'}`}
+              >
+                Comprehensive (Both ST & LT)
+              </button>
+              <button 
+                onClick={() => setAnalysisIntent('overall')}
+                className={`text-xs p-2 rounded text-left transition-colors ${analysisIntent === 'overall' ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/50' : 'bg-slate-900 text-slate-400 border border-transparent'}`}
+              >
+                Overall Only (Long Term / Ppk)
+              </button>
+              <button 
+                onClick={() => setAnalysisIntent('shortTerm')}
+                className={`text-xs p-2 rounded text-left transition-colors ${analysisIntent === 'shortTerm' ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/50' : 'bg-slate-900 text-slate-400 border border-transparent'}`}
+              >
+                Short Term Only (Cpk Focus)
+              </button>
+            </div>
+            <p className="text-[10px] text-slate-500 mt-2 italic">
+              Note: Subgroups &lt; total sample indicate ST variation.
+            </p>
           </div>
 
           <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
@@ -193,23 +242,31 @@ export default function CapabilityModule({ datasets }: { datasets: any[] }) {
           {/* Results Grid */}
           {results && (
             <ExportWrapper fileName="capability-indices">
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
-                  <div className="text-xs text-slate-400 uppercase tracking-wider">Cp (Potential)</div>
-                  <div className="text-2xl font-mono text-white mt-1">{results.Cp ? results.Cp.toFixed(2) : 'N/A'}</div>
-                </div>
-                <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
-                  <div className="text-xs text-slate-400 uppercase tracking-wider">Cpk (Demonstrated)</div>
-                  <div className="text-2xl font-mono text-yellow-400 mt-1">{results.Cpk ? results.Cpk.toFixed(2) : 'N/A'}</div>
-                </div>
-                <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
-                  <div className="text-xs text-slate-400 uppercase tracking-wider">Pp (Overall)</div>
-                  <div className="text-2xl font-mono text-white mt-1">{results.Pp ? results.Pp.toFixed(2) : 'N/A'}</div>
-                </div>
-                <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
-                  <div className="text-xs text-slate-400 uppercase tracking-wider">Ppk (Overall Actual)</div>
-                  <div className="text-2xl font-mono text-cyan-400 mt-1">{results.Ppk ? results.Ppk.toFixed(2) : 'N/A'}</div>
-                </div>
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                {(analysisIntent === 'both' || analysisIntent === 'shortTerm' || fixedSubgroupSize < rawData.length) && (
+                  <>
+                    <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                      <div className="text-xs text-slate-400 uppercase tracking-wider">Cp (Potential ST)</div>
+                      <div className="text-2xl font-mono text-white mt-1">{results.Cp ? results.Cp.toFixed(2) : 'N/A'}</div>
+                    </div>
+                    <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                      <div className="text-xs text-slate-400 uppercase tracking-wider">Cpk (Within ST)</div>
+                      <div className="text-2xl font-mono text-yellow-400 mt-1">{results.Cpk ? results.Cpk.toFixed(2) : 'N/A'}</div>
+                    </div>
+                  </>
+                )}
+                {(analysisIntent === 'both' || analysisIntent === 'overall' || fixedSubgroupSize === rawData.length) && (
+                  <>
+                    <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                      <div className="text-xs text-slate-400 uppercase tracking-wider">Pp (Potential LT)</div>
+                      <div className="text-2xl font-mono text-white mt-1">{results.Pp ? results.Pp.toFixed(2) : 'N/A'}</div>
+                    </div>
+                    <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                      <div className="text-xs text-slate-400 uppercase tracking-wider">Ppk (Overall Actual LT)</div>
+                      <div className="text-2xl font-mono text-cyan-400 mt-1">{results.Ppk ? results.Ppk.toFixed(2) : 'N/A'}</div>
+                    </div>
+                  </>
+                )}
               </div>
             </ExportWrapper>
           )}
@@ -250,27 +307,31 @@ export default function CapabilityModule({ datasets }: { datasets: any[] }) {
           {/* PPM Estimates */}
           {results && (
             <ExportWrapper fileName="capability-ppm">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
-                    <h4 className="text-sm font-semibold text-slate-300 border-b border-slate-700 pb-2 mb-2">Within Performance (Short Term)</h4>
-                    <div className="flex justify-between text-sm"><span className="text-slate-400">PPM &lt; LSL:</span> <span className="font-mono text-white">{results.expectedPpmLsl.toFixed(0)}</span></div>
-                    <div className="flex justify-between text-sm"><span className="text-slate-400">PPM &gt; USL:</span> <span className="font-mono text-white">{results.expectedPpmUsl.toFixed(0)}</span></div>
-                    <div className="flex justify-between text-sm font-bold mt-2"><span className="text-slate-300">Total PPM:</span> <span className="font-mono text-red-400">{results.expectedPpmTotal.toFixed(0)}</span></div>
-                    <div className="flex justify-between text-sm font-bold mt-2 pt-2 border-t border-slate-700/50">
-                      <span className="text-sky-400">Z Score (Z Bench):</span> 
-                      <span className="font-mono text-sky-400">{results.zBenchWithin ? results.zBenchWithin.toFixed(2) : 'N/A'}</span>
-                    </div>
-                </div>
-                <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
-                    <h4 className="text-sm font-semibold text-slate-300 border-b border-slate-700 pb-2 mb-2">Overall Performance (Long Term)</h4>
-                    <div className="flex justify-between text-sm"><span className="text-slate-400">PPM &lt; LSL:</span> <span className="font-mono text-white">{results.overallPpmLsl.toFixed(0)}</span></div>
-                    <div className="flex justify-between text-sm"><span className="text-slate-400">PPM &gt; USL:</span> <span className="font-mono text-white">{results.overallPpmUsl.toFixed(0)}</span></div>
-                    <div className="flex justify-between text-sm font-bold mt-2"><span className="text-slate-300">Total PPM:</span> <span className="font-mono text-red-400">{results.overallPpmTotal.toFixed(0)}</span></div>
-                    <div className="flex justify-between text-sm font-bold mt-2 pt-2 border-t border-slate-700/50">
-                      <span className="text-cyan-400">Z Score (Z Bench):</span> 
-                      <span className="font-mono text-cyan-400">{results.zBenchOverall ? results.zBenchOverall.toFixed(2) : 'N/A'}</span>
-                    </div>
-                </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {(analysisIntent === 'both' || analysisIntent === 'shortTerm' || fixedSubgroupSize < rawData.length) && (
+                  <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                      <h4 className="text-sm font-semibold text-slate-300 border-b border-slate-700 pb-2 mb-2">Within Performance (Short Term)</h4>
+                      <div className="flex justify-between text-sm"><span className="text-slate-400">PPM &lt; LSL:</span> <span className="font-mono text-white">{results.expectedPpmLsl.toFixed(0)}</span></div>
+                      <div className="flex justify-between text-sm"><span className="text-slate-400">PPM &gt; USL:</span> <span className="font-mono text-white">{results.expectedPpmUsl.toFixed(0)}</span></div>
+                      <div className="flex justify-between text-sm font-bold mt-2"><span className="text-slate-300">Total PPM:</span> <span className="font-mono text-red-400">{results.expectedPpmTotal.toFixed(0)}</span></div>
+                      <div className="flex justify-between text-sm font-bold mt-2 pt-2 border-t border-slate-700/50">
+                        <span className="text-sky-400">Z Score (Z Bench):</span> 
+                        <span className="font-mono text-sky-400">{results.zBenchWithin ? results.zBenchWithin.toFixed(2) : 'N/A'}</span>
+                      </div>
+                  </div>
+                )}
+                {(analysisIntent === 'both' || analysisIntent === 'overall' || fixedSubgroupSize === rawData.length) && (
+                  <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                      <h4 className="text-sm font-semibold text-slate-300 border-b border-slate-700 pb-2 mb-2">Overall Performance (Long Term)</h4>
+                      <div className="flex justify-between text-sm"><span className="text-slate-400">PPM &lt; LSL:</span> <span className="font-mono text-white">{results.overallPpmLsl.toFixed(0)}</span></div>
+                      <div className="flex justify-between text-sm"><span className="text-slate-400">PPM &gt; USL:</span> <span className="font-mono text-white">{results.overallPpmUsl.toFixed(0)}</span></div>
+                      <div className="flex justify-between text-sm font-bold mt-2"><span className="text-slate-300">Total PPM:</span> <span className="font-mono text-red-400">{results.overallPpmTotal.toFixed(0)}</span></div>
+                      <div className="flex justify-between text-sm font-bold mt-2 pt-2 border-t border-slate-700/50">
+                        <span className="text-cyan-400">Z Score (Z Bench):</span> 
+                        <span className="font-mono text-cyan-400">{results.zBenchOverall ? results.zBenchOverall.toFixed(2) : 'N/A'}</span>
+                      </div>
+                  </div>
+                )}
               </div>
             </ExportWrapper>
           )}
