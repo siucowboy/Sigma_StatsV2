@@ -554,7 +554,8 @@ export function run2SampleProportion(e1: number, n1: number, e2: number, n2: num
     diffLower: (p1 - p2) - zAlpha * seDiff, 
     diffUpper: (p1 - p2) + zAlpha * seDiff,
     ci1: { nominal: p1, lower: Math.max(0, p1 - margin1), upper: Math.min(1, p1 + margin1) },
-    ci2: { nominal: p2, lower: Math.max(0, p2 - margin2), upper: Math.min(1, p2 + margin2) }
+    ci2: { nominal: p2, lower: Math.max(0, p2 - margin2), upper: Math.min(1, p2 + margin2) },
+    e1, n1, e2, n2
   };
 }
 
@@ -575,7 +576,13 @@ export function run1SamplePoisson(events: number, sampleSize: number, targetRate
   
   const zAlpha = jStat.normal.inv(1 - (1 - confidence) / 2, 0, 1);
   const margin = zAlpha * Math.sqrt(rate / sampleSize);
-  return { statistic: rate, pValue, rate, ci1: { nominal: rate, lower: Math.max(0, rate - margin), upper: rate + margin } };
+  return { 
+    statistic: rate, 
+    pValue, 
+    rate, 
+    ci1: { nominal: rate, lower: Math.max(0, rate - margin), upper: rate + margin },
+    events, sampleSize, targetRate
+  };
 }
 
 export function run2SamplePoisson(e1: number, s1: number, e2: number, s2: number, alternative: string = 'neq', confidence: number = 0.95) {

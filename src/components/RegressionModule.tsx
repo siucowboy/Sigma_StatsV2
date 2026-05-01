@@ -323,7 +323,27 @@ export default function RegressionModule({ datasets }: { datasets: any[] }) {
                   </div>
                 </div>
 
-                <div className="h-[500px]">
+                <div className="h-[500px] relative">
+                  {results && (
+                    <div className="absolute top-4 right-4 bg-slate-900/90 p-3 rounded border border-slate-700 text-[11px] font-mono z-10 shadow-xl max-w-[250px] pointer-events-none">
+                      <div className="text-sky-400 font-bold mb-2 break-words border-b border-slate-700 pb-2">
+                        {equation}
+                      </div>
+                      <div className="flex justify-between gap-4 text-slate-300">
+                        {predictorIds.length >= 3 ? (
+                          <>
+                            <span className="text-slate-500 uppercase text-[9px] font-bold">Adj R-Sq</span>
+                            <span className="text-emerald-400 font-bold">{(results.rSqAdj * 100).toFixed(2)}%</span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-slate-500 uppercase text-[9px] font-bold">R-Sq</span>
+                            <span className="text-emerald-400 font-bold">{(results.rSq * 100).toFixed(2)}%</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )}
                   {plotPredictors.length > 2 ? (
                     <div className="flex flex-col items-center justify-center h-full text-slate-500 border border-dashed border-slate-700 rounded-lg bg-slate-900/20 px-8 text-center">
                       <TrendingUp size={48} className="mb-4 opacity-20" />

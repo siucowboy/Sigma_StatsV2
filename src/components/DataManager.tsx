@@ -30,10 +30,20 @@ export default function DataManager({ datasets, setDatasets }: Props) {
       let isNumeric = true;
 
       for (let i = 1; i < rawData.length; i++) {
-        const val = rawData[i][colIndex];
+        let val = rawData[i][colIndex];
         
         // Skip empty values efficiently
         if (val === undefined || val === null || val === '') continue;
+
+        // Handle percentage strings
+        if (typeof val === 'string' && val.trim().endsWith('%')) {
+          const stripped = val.trim().replace('%', '');
+          const num = Number(stripped);
+          if (!isNaN(num)) {
+            values.push(num / 100);
+            continue;
+          }
+        }
 
         const numVal = Number(val);
         if (isNaN(numVal)) {
