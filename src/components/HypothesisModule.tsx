@@ -16,7 +16,7 @@ import {
   Legend,
   ComposedChart
 } from 'recharts';
-import { CheckCircle2, XCircle, AlertCircle, HelpCircle, Activity, TrendingUp } from 'lucide-react';
+import { CheckCircle2, XCircle, AlertCircle, HelpCircle, Activity, TrendingUp, Zap } from 'lucide-react';
 import * as jStatModule from 'jstat';
 const jStat: any = (jStatModule as any).default?.jStat || (jStatModule as any).jStat || (jStatModule as any).default || jStatModule;
 
@@ -31,6 +31,8 @@ import {
   run2SampleTTest, 
   calculateAndersonDarling, 
   generateQQData, 
+  run1SampleVarianceTest,
+  runBartlettTest,
   runFTest, 
   runLeveneTest, 
   runMannWhitneyU, 
@@ -55,7 +57,8 @@ import {
 } from '../lib/stats';
 
 // --- Sub-components for cleaner UI ---
-const formatPropValue = (val: number, decimals: number = 4) => {
+const formatPropValue = (val: any, decimals: number = 4) => {
+  if (typeof val !== 'number' || isNaN(val)) return '--';
   if (val === 0) return (0).toFixed(decimals);
   if (Math.abs(val) < 0.001) return val.toExponential(decimals);
   return val.toFixed(decimals);
@@ -106,6 +109,7 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
     { id: '1-sample', label: '1-Sample' },
     { id: '2-sample', label: 'Two-Sample Analysis' },
     { id: 'anova', label: '3 or more' },
+    { id: 'variance', label: 'Variance Testing' },
     { id: 'chi-square', label: 'Chi-Squared' },
     { id: 'proportion', label: 'Proportions' },
     { id: 'poisson', label: 'Poisson' }
@@ -124,7 +128,7 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
   const [propType, setPropType] = useState<'1samp' | '2samp'>('1samp');
   const [pLabel1, setPLabel1] = useState('Sample A');
   const [pLabel2, setPLabel2] = useState('Sample B');
-  const [pUnits1, setPUnits1] = useState<number | ''>(1000000);
+  const [pUnits1, setPUnits1] = useState<number | ''>(100);
   const [pOpps1, setPOpps1] = useState<number | ''>(1);
   const [pEvents1, setPEvents1] = useState<number | ''>(30);
   
@@ -132,9 +136,20 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
   const [pOpps2, setPOpps2] = useState<number | ''>(1);
   const [pEvents2, setPEvents2] = useState<number | ''>(60);
   
-  const [pTarget, setPTarget] = useState<number | ''>(0.5);
+  const [pTarget, setPTarget] = useState<number | ''>(0.35);
   const [pPooled, setPPooled] = useState(true);
   const [propAlt, setPropAlt] = useState('neq');
+
+  // Variance State
+  const [varType, setVarType] = useState<'1samp' | '2samp' | 'multi'>('2samp');
+  const [varInputType, setVarInputType] = useState<'unstacked' | 'stacked'>('unstacked');
+  const [varData1Id, setVarData1Id] = useState('');
+  const [varData2Id, setVarData2Id] = useState('');
+  const [varValueId, setVarValueId] = useState('');
+  const [varGroupId, setVarGroupId] = useState('');
+  const [varMultiIds, setVarMultiIds] = useState<string[]>([]);
+  const [varTarget, setVarTarget] = useState<number | ''>(1);
+  const [varAlt, setVarAlt] = useState('neq');
 
   // Poisson State
   const [poiType, setPoiType] = useState<'1samp' | '2samp'>('1samp');
@@ -407,6 +422,97 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
       ) : null
     };
   }, [activeTab, anovaInputType, anovaValueId, anovaGroupId, anovaMultiIds, anovaAlt, alpha, datasets]);
+
+  // --- Variance Test Logic ---
+  const varianceAnalysis = useMemo(() => {
+    if (activeTab !== 'variance') return null;
+
+    let groups: { name: string, data: number[] }[] = [];
+
+    if (varType === '1samp') {
+      const ds = datasets.find(d => d.id === varData1Id);
+      if (ds) {
+        groups = [{
+          name: ds.name,
+          data: ds.values.map((v: any) => Number(v)).filter((v: any) => !isNaN(v))
+        }];
+      }
+    } else if (varInputType === 'stacked') {
+      const valCol = datasets.find(d => d.id === varValueId);
+      const grpCol = datasets.find(d => d.id === varGroupId);
+      if (valCol && grpCol) {
+        const uniqueGroups = [...new Set(grpCol.values)].filter(g => g !== null && g !== undefined && g !== '');
+        groups = uniqueGroups.map(g => ({
+          name: String(g),
+          data: valCol.values
+            .filter((_: any, i: number) => grpCol.values[i] === g)
+            .map((v: any) => Number(v))
+            .filter((v: any) => !isNaN(v))
+        }));
+      }
+    } else {
+      const ids = varType === '2samp' ? [varData1Id, varData2Id] : varMultiIds;
+      groups = ids.map(id => {
+        const ds = datasets.find(d => d.id === id);
+        if (!ds) return { name: '', data: [] };
+        return {
+          name: ds.name,
+          data: ds.values.map((v: any) => Number(v)).filter((v: any) => !isNaN(v))
+        };
+      }).filter(g => g.data.length > 0);
+    }
+
+    if (groups.length === 0) return null;
+    if (varType !== '1samp' && groups.length < 2) return null;
+
+    const groupDataArray = groups.map(g => g.data);
+    const normalityResults = groups.map(g => ({
+      name: g.name,
+      ...calculateAndersonDarling(g.data)
+    }));
+    const isNormal = normalityResults.every(r => r.pValue > alpha);
+
+    let testUsed = "";
+    let testResults: any = null;
+
+    if (varType === '1samp') {
+      testUsed = "1-Sample Variance Test";
+      testResults = run1SampleVarianceTest(groups[0].data, Number(varTarget) || 1, varAlt);
+    } else if (isNormal) {
+      if (groups.length === 2) {
+        testUsed = "F-Test for 2 Variances";
+        testResults = runFTest(groups[0].data, groups[1].data, varAlt);
+      } else {
+        testUsed = "Bartlett's Test (Homogeneity of Variances)";
+        testResults = runBartlettTest(groupDataArray);
+      }
+    } else {
+      testUsed = "Levene's Test (Robust for Non-Normal)";
+      testResults = runLeveneTest(groupDataArray);
+    }
+
+    const ciData = groups.map(g => {
+      const ci = getVarianceConfidenceInterval(g.data, 1 - alpha);
+      return {
+        name: g.name,
+        sd: ci.sd,
+        lcl: ci.sdLcl,
+        ucl: ci.sdUcl,
+        range: [ci.sdLcl, ci.sdUcl]
+      };
+    });
+
+    return {
+      groups,
+      normalityResults,
+      isNormal,
+      testUsed,
+      testResults,
+      ciData,
+      pValue: testResults.pValue,
+      significant: testResults.pValue < alpha
+    };
+  }, [activeTab, varType, varInputType, varData1Id, varData2Id, varValueId, varGroupId, varMultiIds, varTarget, varAlt, alpha, datasets]);
 
   // --- Chi-Squared Calculations ---
   const chiResults = useMemo(() => {
@@ -705,6 +811,131 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                     <option value="neq">Difference exists (≠)</option>
                     <option value="greater">Increasing Trend (&gt;)</option>
                     <option value="less">Decreasing Trend (&lt;)</option>
+                  </select>
+                </div>
+              </div>
+            )}
+            
+            {activeTab === 'variance' && (
+              <div className="space-y-4">
+                <label className="block text-xs uppercase text-slate-500 font-bold">Analysis Type</label>
+                <div className="grid grid-cols-3 gap-2 bg-slate-900 p-1 rounded border border-slate-700">
+                  <button 
+                    onClick={() => setVarType('1samp')}
+                    className={`py-1 text-xs rounded transition ${varType === '1samp' ? 'bg-slate-700 text-white' : 'text-slate-500 hover:text-slate-300'}`}
+                  >
+                    1-Sample
+                  </button>
+                  <button 
+                    onClick={() => setVarType('2samp')}
+                    className={`py-1 text-xs rounded transition ${varType === '2samp' ? 'bg-slate-700 text-white' : 'text-slate-500 hover:text-slate-300'}`}
+                  >
+                    2-Sample
+                  </button>
+                  <button 
+                    onClick={() => setVarType('multi')}
+                    className={`py-1 text-xs rounded transition ${varType === 'multi' ? 'bg-slate-700 text-white' : 'text-slate-500 hover:text-slate-300'}`}
+                  >
+                    Multi-Sample
+                  </button>
+                </div>
+
+                {varType !== '1samp' && (
+                  <>
+                    <label className="block text-xs uppercase text-slate-500 font-bold">Data Layout</label>
+                    <div className="flex bg-slate-900 p-1 rounded border border-slate-700">
+                      <button 
+                        onClick={() => setVarInputType('stacked')}
+                        className={`flex-1 py-1 text-xs rounded transition ${varInputType === 'stacked' ? 'bg-slate-700 text-white' : 'text-slate-500 hover:text-slate-300'}`}
+                      >
+                        Stacked
+                      </button>
+                      <button 
+                        onClick={() => setVarInputType('unstacked')}
+                        className={`flex-1 py-1 text-xs rounded transition ${varInputType === 'unstacked' ? 'bg-slate-700 text-white' : 'text-slate-500 hover:text-slate-300'}`}
+                      >
+                        Individual Columns
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {varType === '1samp' ? (
+                  <div className="space-y-4">
+                    <label className="block text-xs uppercase text-slate-500 font-bold">Data Column</label>
+                    <select className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm text-slate-200" value={varData1Id} onChange={e => setVarData1Id(e.target.value)}>
+                      <option value="">Select Data...</option>
+                      {datasets.filter(d => d.isNumeric).map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                    </select>
+
+                    <label className="block text-xs uppercase text-slate-500 font-bold">Hypothesized StDev</label>
+                    <input 
+                      type="number" 
+                      className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm text-slate-200" 
+                      value={varTarget} 
+                      onChange={e => setVarTarget(e.target.value === '' ? '' : Number(e.target.value))}
+                      placeholder="e.g., 1.5"
+                    />
+                  </div>
+                ) : varInputType === 'stacked' ? (
+                  <div className="space-y-4">
+                    <label className="block text-xs uppercase text-slate-500 font-bold">Response Column (Values)</label>
+                    <select className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm text-slate-200" value={varValueId} onChange={e => setVarValueId(e.target.value)}>
+                      <option value="">Select Values...</option>
+                      {datasets.filter(d => d.isNumeric).map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                    </select>
+
+                    <label className="block text-xs uppercase text-slate-500 font-bold">Factor Column (Groups)</label>
+                    <select className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm text-slate-200" value={varGroupId} onChange={e => setVarGroupId(e.target.value)}>
+                      <option value="">Select Groups...</option>
+                      {datasets.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                    </select>
+                  </div>
+                ) : varType === '2samp' ? (
+                  <div className="space-y-4">
+                    <label className="block text-xs uppercase text-slate-500 font-bold">Group 1 Column</label>
+                    <select className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm text-slate-200" value={varData1Id} onChange={e => setVarData1Id(e.target.value)}>
+                      <option value="">Select Dataset...</option>
+                      {datasets.filter(d => d.isNumeric).map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                    </select>
+                    <label className="block text-xs uppercase text-slate-500 font-bold">Group 2 Column</label>
+                    <select className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm text-slate-200" value={varData2Id} onChange={e => setVarData2Id(e.target.value)}>
+                      <option value="">Select Dataset...</option>
+                      {datasets.filter(d => d.isNumeric).map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                    </select>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <label className="block text-xs uppercase text-slate-500 font-bold">Data Columns</label>
+                    <div className="grid grid-cols-1 gap-2 max-h-48 overflow-y-auto p-2 border border-slate-800 rounded bg-slate-950">
+                      {datasets.map(d => (
+                        <div key={d.id} className="flex items-center gap-2 text-xs">
+                          <input 
+                            type="checkbox" 
+                            className="rounded border-slate-700 bg-slate-900 text-sky-500"
+                            checked={varMultiIds.includes(d.id)}
+                            onChange={(e) => {
+                              if (e.target.checked) setVarMultiIds(prev => [...prev, d.id]);
+                              else setVarMultiIds(prev => prev.filter(id => id !== d.id));
+                            }}
+                          />
+                          <span className="truncate text-slate-300">{d.name}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="pt-2 border-t border-slate-700 mt-4">
+                  <label className="block text-xs uppercase text-slate-500 font-bold mb-2">Alternative (H₁)</label>
+                  <select 
+                    className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm text-slate-200" 
+                    value={varAlt} 
+                    onChange={e => setVarAlt(e.target.value)}
+                  >
+                    <option value="neq">Variances are different (≠)</option>
+                    <option value="greater">Group 1 &gt; Baseline/Group 2 (&gt;)</option>
+                    <option value="less">Group 1 &lt; Baseline/Group 2 (&lt;)</option>
                   </select>
                 </div>
               </div>
@@ -1658,6 +1889,141 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                     </ExportWrapper>
                   </div>
                 </div>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'variance' && (
+            <div className="bg-slate-900 p-6 rounded-lg border border-slate-800 shadow-2xl space-y-8 min-h-[800px]">
+              <div className="flex justify-between items-center bg-slate-800/50 p-4 rounded-t-lg border-b border-slate-700 -mx-6 -mt-6 mb-6">
+                <div>
+                  <h3 className="text-2xl font-black italic text-sky-400 uppercase tracking-tighter">Variance Analysis Output</h3>
+                  {varianceAnalysis && <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">Method: {varianceAnalysis.testUsed}</div>}
+                </div>
+                <div className="flex gap-4 text-[10px] font-bold text-slate-500">
+                  <span className="flex items-center gap-1"><Activity size={12}/> ENGINE: SIGMA-6</span>
+                  <span className="flex items-center gap-1"><TrendingUp size={12}/> CONFIDENCE: {(1-alpha)*100}%</span>
+                </div>
+              </div>
+
+              {!varianceAnalysis ? (
+                <div className="h-64 flex flex-col items-center justify-center border border-dashed border-slate-700 rounded text-slate-500 italic space-y-2">
+                  <Activity size={48} className="text-slate-800 animate-pulse" />
+                  <p>Awaiting Data Selection...</p>
+                </div>
+              ) : (
+                <ExportWrapper fileName="variance-results">
+                  <div className="space-y-8">
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                      <div className="lg:col-span-2 space-y-6">
+                         {/* Normality Summary */}
+                        <div className="bg-slate-950/50 rounded p-4 border border-slate-800/50">
+                          <h4 className="text-[10px] font-bold text-slate-500 uppercase mb-3 tracking-widest flex items-center gap-2">
+                            <Activity size={14} className="text-sky-500" /> Pre-Test Diagnostics
+                          </h4>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {varianceAnalysis.normalityResults.map((norm: any, idx: number) => (
+                              <DiagnosticIndicator 
+                                key={idx}
+                                label={`Normality: ${norm.name}`} 
+                                passed={norm.pValue > alpha} 
+                                pValue={norm.pValue}
+                              />
+                            ))}
+                            <div className="p-3 bg-slate-900/50 rounded border border-slate-700 flex flex-col justify-center">
+                                <span className="text-[8px] text-slate-500 uppercase font-black">Method Selection</span>
+                                <span className="text-xs text-slate-200 mt-1 font-mono">{varianceAnalysis.testUsed}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Test Results */}
+                        <div className="bg-slate-950/50 rounded p-4 border border-slate-800/50 relative overflow-hidden">
+                           <div className="absolute top-0 right-0 p-2">
+                              <div className={`text-[8px] font-black px-2 py-0.5 rounded shadow-sm ${varianceAnalysis.significant ? 'bg-amber-500/20 text-amber-500 ring-1 ring-amber-500/30' : 'bg-slate-800 text-slate-500 ring-1 ring-slate-700'}`}>
+                                {varianceAnalysis.significant ? 'SIGNIFICANT' : 'INSIGNIFICANT'}
+                              </div>
+                           </div>
+                           
+                           <h4 className="text-[10px] font-bold text-slate-500 uppercase mb-4 tracking-widest flex items-center gap-2">
+                            < Zap size={14} className="text-amber-500" /> Statistical Indices
+                          </h4>
+
+                          <div className="grid grid-cols-3 gap-8">
+                             <div className="text-center">
+                                <div className="text-[10px] text-slate-500 uppercase font-black mb-1">Test Statistic</div>
+                                <div className="text-3xl font-mono text-white font-black">{formatPropValue(varianceAnalysis.testResults.statistic)}</div>
+                             </div>
+                             <div className="text-center border-x border-slate-800/50">
+                                <div className="text-[10px] text-slate-500 uppercase font-black mb-1">P-Value</div>
+                                <div className={`text-3xl font-mono font-black ${varianceAnalysis.significant ? 'text-amber-500' : 'text-slate-300'}`}>
+                                  {formatPropValue(varianceAnalysis.pValue)}
+                                </div>
+                             </div>
+                             <div className="text-center">
+                                <div className="text-[10px] text-slate-500 uppercase font-black mb-1">D.F.</div>
+                                <div className="text-3xl font-mono text-slate-400 font-black">
+                                   {varianceAnalysis.testResults.df !== undefined ? varianceAnalysis.testResults.df : `${varianceAnalysis.testResults.df1}, ${varianceAnalysis.testResults.df2}`}
+                                </div>
+                             </div>
+                          </div>
+                        </div>
+
+                        {/* CI Plot */}
+                        <div className="bg-slate-950/50 rounded p-4 border border-slate-800/50 h-[320px]">
+                           <h4 className="text-[10px] font-bold text-slate-500 uppercase mb-4 tracking-widest">Confidence Intervals (StDev)</h4>
+                           <ResponsiveContainer width="100%" height="85%">
+                              <BarChart data={varianceAnalysis.ciData} layout="vertical">
+                                 <XAxis type="number" domain={['auto', 'auto']} stroke="#475569" fontSize={10} />
+                                 <YAxis dataKey="name" type="category" stroke="#475569" fontSize={10} width={80} />
+                                 <Tooltip 
+                                    contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155' }}
+                                    labelStyle={{ color: '#94a3b8' }}
+                                    itemStyle={{ color: '#38bdf8' }}
+                                    formatter={(v: any) => formatPropValue(v)}
+                                 />
+                                 {/* Horizontal line for CI */}
+                                 <Bar dataKey="range" fill="#0ea5e9" barSize={4} radius={[2, 2, 2, 2]} />
+                                 {/* Dot for point estimate */}
+                                 <Scatter dataKey="sd" fill="#f59e0b" />
+                              </BarChart>
+                           </ResponsiveContainer>
+                        </div>
+                      </div>
+
+                      <div className="space-y-6">
+                         <div className="bg-slate-950/50 rounded border border-slate-800/50 overflow-hidden">
+                            <div className="bg-slate-800/30 p-2 text-[10px] font-bold text-slate-500 uppercase tracking-tighter border-b border-slate-800/50">
+                               Sample Variances & SDs
+                            </div>
+                            <div className="divide-y divide-slate-800/50 max-h-[600px] overflow-y-auto">
+                               {varianceAnalysis.ciData.map((item: any, i: number) => (
+                                  <div key={i} className="p-3">
+                                     <div className="flex justify-between items-start mb-1">
+                                        <div className="truncate w-32">
+                                          <span className="text-[10px] font-bold text-sky-400">{item.name}</span>
+                                          <div className="text-[8px] text-slate-600 uppercase font-black">Normality p: {formatPropValue(varianceAnalysis.normalityResults[i].pValue, 3)}</div>
+                                        </div>
+                                        <span className="text-[10px] font-mono text-slate-500">n={varianceAnalysis.groups[i].data.length}</span>
+                                     </div>
+                                     <div className="grid grid-cols-2 gap-2 mt-2">
+                                        <div className="bg-slate-900/50 p-2 rounded">
+                                           <div className="text-[8px] text-slate-500 uppercase font-black">Variance</div>
+                                           <div className="text-xs text-white font-mono">{formatPropValue(item.sd**2)}</div>
+                                        </div>
+                                        <div className="bg-slate-900/50 p-2 rounded">
+                                           <div className="text-[8px] text-slate-500 uppercase font-black">StDev</div>
+                                           <div className="text-xs text-amber-500 font-mono">{formatPropValue(item.sd)}</div>
+                                        </div>
+                                     </div>
+                                  </div>
+                               ))}
+                            </div>
+                         </div>
+                      </div>
+                    </div>
+                  </div>
+                </ExportWrapper>
               )}
             </div>
           )}

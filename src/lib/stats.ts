@@ -522,11 +522,58 @@ export function calculateAndersonDarling(data: number[]) {
   return { statistic: A2adj, pValue: p };
 }
 
-export function runFTest(data1: number[], data2: number[]) {
+export function run1SampleVarianceTest(data: number[], targetVar: number, alternative: string = 'neq') {
+  const n = data.length;
+  if (n < 2) return { pValue: 1, statistic: 0, df: n - 1, variance: 0 };
+  const v = Math.pow(getStdDev(data), 2);
+  const chi2 = ((n - 1) * v) / targetVar;
+  const df = n - 1;
+  let pValue: number;
+  
+  if (alternative === 'greater') {
+    pValue = 1 - jStat.chisquare.cdf(chi2, df);
+  } else if (alternative === 'less') {
+    pValue = jStat.chisquare.cdf(chi2, df);
+  } else {
+    const p = jStat.chisquare.cdf(chi2, df);
+    pValue = 2 * Math.min(p, 1 - p);
+  }
+  
+  return { pValue, statistic: chi2, df, variance: v };
+}
+
+export function runBartlettTest(groups: number[][]) {
+  const k = groups.length;
+  const ns = groups.map(g => g.length);
+  const nTotal = ns.reduce((a, b) => a + b, 0);
+  const vars = groups.map(g => Math.pow(getStdDev(g), 2));
+  
+  const pooledVar = groups.reduce((acc, g, i) => acc + (ns[i] - 1) * vars[i], 0) / (nTotal - k);
+  
+  const numerator = (nTotal - k) * Math.log(pooledVar) - ns.reduce((acc, n, i) => acc + (n - 1) * Math.log(vars[i]), 0);
+  const c = 1 + (1 / (3 * (k - 1))) * (ns.reduce((acc, n) => acc + (1 / (n - 1)), 0) - (1 / (nTotal - k)));
+  
+  const b = numerator / c;
+  const pValue = 1 - jStat.chisquare.cdf(b, k - 1);
+  
+  return { statistic: b, pValue, df: k - 1 };
+}
+
+export function runFTest(data1: number[], data2: number[], alternative: string = 'neq') {
   const v1 = Math.pow(getStdDev(data1), 2), v2 = Math.pow(getStdDev(data2), 2);
   const df1 = data1.length - 1, df2 = data2.length - 1;
   const f = v1 / v2;
-  let pValue = 2 * (1 - jStat.centralF.cdf(Math.max(f, 1 / f), df1, df2));
+  
+  let pValue: number;
+  if (alternative === 'greater') {
+    pValue = 1 - jStat.centralF.cdf(f, df1, df2);
+  } else if (alternative === 'less') {
+    pValue = jStat.centralF.cdf(f, df1, df2);
+  } else {
+    const p = jStat.centralF.cdf(f, df1, df2);
+    pValue = 2 * Math.min(p, 1 - p);
+  }
+  
   return { statistic: f, pValue: Math.min(1, pValue), df1, df2 };
 }
 
