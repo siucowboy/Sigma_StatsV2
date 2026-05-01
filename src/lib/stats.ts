@@ -408,6 +408,53 @@ export function run1SampleTTest(data: number[], target: number, alternative: str
   return { pValue, statistic: t, df, mean, sd, n };
 }
 
+export function run1SampleZTest(data: number[], target: number, alternative: string = 'neq') {
+  const n = data.length;
+  if (n < 1) return { pValue: 1, statistic: 0, mean: 0, sd: 0, n: 0 };
+  const mean = getMean(data);
+  const sd = getStdDev(data);
+  const se = sd / Math.sqrt(n);
+  const z = se === 0 ? 0 : (mean - target) / se;
+  let pValue: number;
+  if (alternative === 'greater') pValue = 1 - jStat.normal.cdf(z, 0, 1);
+  else if (alternative === 'less') pValue = jStat.normal.cdf(z, 0, 1);
+  else pValue = 2 * (1 - jStat.normal.cdf(Math.abs(z), 0, 1));
+  return { pValue, statistic: z, mean, sd, n };
+}
+
+export function run1SampleWilcoxon(data: number[], target: number, alternative: string = 'neq') {
+  const diffs = data.map(x => x - target).filter(x => x !== 0);
+  const n = diffs.length;
+  if (n < 5) return { pValue: 1, statistic: 0, n, mean: getMean(data) };
+
+  const absDiffs = diffs.map(Math.abs);
+  const ranked = absDiffs.map((val, i) => ({ val, sign: Math.sign(diffs[i]) }))
+    .sort((a, b) => a.val - b.val);
+
+  let rSumPos = 0;
+  let i = 0;
+  while (i < n) {
+    let j = i;
+    while (j < n && ranked[j].val === ranked[i].val) j++;
+    const rank = (i + 1 + j) / 2;
+    for (let k = i; k < j; k++) {
+      if (ranked[k].sign > 0) rSumPos += rank;
+    }
+    i = j;
+  }
+
+  const m = (n * (n + 1)) / 4;
+  const s = Math.sqrt((n * (n + 1) * (2 * n + 1)) / 24);
+  const z = (rSumPos - m) / s;
+
+  let pValue: number;
+  if (alternative === 'greater') pValue = 1 - jStat.normal.cdf(z, 0, 1);
+  else if (alternative === 'less') pValue = jStat.normal.cdf(z, 0, 1);
+  else pValue = 2 * (1 - jStat.normal.cdf(Math.abs(z), 0, 1));
+
+  return { pValue, statistic: rSumPos, n, mean: getMean(data) };
+}
+
 export function run2SampleTTest(data1: number[], data2: number[], alternative: string = 'neq', pooled: boolean = false) {
   const n1 = data1.length, n2 = data2.length;
   if (n1 < 2 || n2 < 2) return { pValue: 1, statistic: 0, df: 0, m1: 0, m2: 0, s1: 0, s2: 0, n1: 0, n2: 0 };
@@ -444,7 +491,16 @@ export function runANOVA(groups: number[][]) {
   const dfB = k - 1, dfW = nTotal - k;
   const msB = ssBetween / dfB, msW = ssWithin / dfW;
   const f = msW === 0 ? 0 : msB / msW;
-  return { pValue: 1 - jStat.centralF.cdf(f, dfB, dfW), statistic: f, dfBetween: dfB, dfWithin: dfW };
+  return { 
+    pValue: 1 - jStat.centralF.cdf(f, dfB, dfW), 
+    statistic: f, 
+    dfBetween: dfB, 
+    dfWithin: dfW,
+    msWithin: msW,
+    ssWithin: ssWithin,
+    msBetween: msB,
+    ssBetween: ssBetween
+  };
 }
 
 export function calculateAndersonDarling(data: number[]) {
@@ -587,15 +643,30 @@ export function run1SamplePoisson(events: number, sampleSize: number, targetRate
 
 export function run2SamplePoisson(e1: number, s1: number, e2: number, s2: number, alternative: string = 'neq', confidence: number = 0.95) {
   const r1 = e1 / s1, r2 = e2 / s2, se = Math.sqrt(r1 / s1 + r2 / s2);
-  const z = se === 0 ? 0 : (r1 - r2) / se;
+  const zValue = se === 0 ? 0 : (r1 - r2) / se;
   let pValue: number;
-  if (alternative === 'greater') pValue = 1 - jStat.normal.cdf(z, 0, 1);
-  else if (alternative === 'less') pValue = jStat.normal.cdf(z, 0, 1);
-  else pValue = 2 * (1 - jStat.normal.cdf(Math.abs(z), 0, 1));
+  if (alternative === 'greater') pValue = 1 - jStat.normal.cdf(zValue, 0, 1);
+  else if (alternative === 'less') pValue = jStat.normal.cdf(zValue, 0, 1);
+  else pValue = 2 * (1 - jStat.normal.cdf(Math.abs(zValue), 0, 1));
 
   const zAlpha = jStat.normal.inv(1 - (1 - confidence) / 2, 0, 1);
   const seDiff = Math.sqrt(r1 / s1 + r2 / s2);
-  return { statistic: z, pValue, r1, r2, diff: r1 - r2, diffLower: (r1 - r2) - zAlpha * seDiff, diffUpper: (r1 - r2) + zAlpha * seDiff };
+  
+  // Calculate individual CIs for plotting
+  const margin1 = zAlpha * Math.sqrt(r1 / s1);
+  const margin2 = zAlpha * Math.sqrt(r2 / s2);
+
+  return { 
+    statistic: zValue, 
+    pValue, 
+    r1, r2, 
+    diff: r1 - r2, 
+    diffLower: (r1 - r2) - zAlpha * seDiff, 
+    diffUpper: (r1 - r2) + zAlpha * seDiff,
+    ci1: { nominal: r1, lower: Math.max(0, r1 - margin1), upper: r1 + margin1 },
+    ci2: { nominal: r2, lower: Math.max(0, r2 - margin2), upper: r2 + margin2 },
+    e1, s1, e2, s2
+  };
 }
 
 export function getConfidenceInterval(data: number[], confidence = 0.95) {
@@ -641,6 +712,96 @@ export function runKruskalWallis(groups: number[][]) {
   const rankSums = groups.map((_, i) => combined.reduce((acc, x, idx) => acc + (x.i === i ? idx + 1 : 0), 0));
   const h = (12 / (n * (n + 1))) * rankSums.reduce((acc, rs, i) => acc + (rs ** 2 / groups[i].length), 0) - 3 * (n + 1);
   return { statistic: h, pValue: 1 - jStat.chisquare.cdf(h, groups.length - 1), df: groups.length - 1 };
+}
+
+export function runTukeyHSD(groups: number[][], msW: number, dfW: number, groupLabels: string[]) {
+  const k = groups.length;
+  const comparisons = [];
+  
+  // Approximate Q critical values for alpha=0.05
+  // k: 2, 3, 4, 5, 6, 7, 8, 9, 10
+  const qTable: { [key: number]: number } = {
+    2: 2.77, 3: 3.31, 4: 3.63, 5: 3.86, 
+    6: 4.03, 7: 4.17, 8: 4.29, 9: 4.39, 10: 4.47
+  };
+  
+  const qCrit = qTable[k] || 4.5;
+  
+  const means = groups.map(g => getMean(g));
+  const ns = groups.map(g => g.length);
+
+  for (let i = 0; i < k; i++) {
+    for (let j = i + 1; j < k; j++) {
+      const diff = Math.abs(means[i] - means[j]);
+      const se = Math.sqrt((msW / 2) * (1 / ns[i] + 1 / ns[j]));
+      const q = diff / se;
+      const isSignificant = q > qCrit;
+      
+      comparisons.push({
+        groupA: groupLabels[i],
+        groupB: groupLabels[j],
+        diff: means[i] - means[j],
+        q,
+        isSignificant
+      });
+    }
+  }
+  return { comparisons, qCrit };
+}
+
+export function runNemenyi(groups: number[][], groupLabels: string[]) {
+  const k = groups.length;
+  const combined = groups.flatMap((g, i) => g.map(v => ({ v, i }))).sort((a, b) => a.v - b.v);
+  const n = combined.length;
+  
+  // Assign ranks with ties handled
+  const ranks = combined.map((x, idx) => {
+    let sumRanks = idx + 1;
+    let count = 1;
+    let next = idx + 1;
+    while (next < n && combined[next].v === combined[idx].v) {
+      sumRanks += next + 1;
+      count++;
+      next++;
+    }
+    const avgRank = sumRanks / count;
+    return { ...x, rank: avgRank };
+  });
+
+  const groupRankMeans = groups.map((_, i) => {
+    const groupRanks = ranks.filter(r => r.i === i).map(r => r.rank);
+    return getMean(groupRanks);
+  });
+  const ns = groups.map(g => g.length);
+
+  // Approximate Q/sqrt(2) critical values for Nemenyi at alpha=0.05
+  // k: 2, 3, 4, 5, 6, 7, 8, 9, 10
+  const qTable: { [key: number]: number } = {
+    2: 2.77, 3: 3.31, 4: 3.63, 5: 3.86, 
+    6: 4.03, 7: 4.17, 8: 4.29, 9: 4.39, 10: 4.47
+  };
+  const qCrit = qTable[k] || 4.5;
+  const cdFactor = qCrit / Math.sqrt(2);
+
+  const comparisons = [];
+  for (let i = 0; i < k; i++) {
+    for (let j = i + 1; j < k; j++) {
+      const diff = Math.abs(groupRankMeans[i] - groupRankMeans[j]);
+      const se = Math.sqrt((n * (n + 1) / 12) * (1 / ns[i] + 1 / ns[j]));
+      const stat = diff / se;
+      const isSignificant = stat > cdFactor;
+
+      comparisons.push({
+        groupA: groupLabels[i],
+        groupB: groupLabels[j],
+        rankDiff: groupRankMeans[i] - groupRankMeans[j],
+        stat,
+        isSignificant
+      });
+    }
+  }
+
+  return { comparisons, qCrit };
 }
 
 function checkStability(data: number[]): boolean {

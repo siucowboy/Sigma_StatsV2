@@ -238,11 +238,11 @@ export default function SPCModule({ datasets }: { datasets: any[] }) {
                   (dataMin: number) => Math.min(dataMin, data.lcl) * 0.95,
                   (dataMax: number) => Math.max(dataMax, data.ucl) * 1.05
                 ]} 
-                tickFormatter={(val) => val.toFixed(4)}
+                tickFormatter={(val) => typeof val === 'number' ? val.toFixed(4) : val}
               />
               <Tooltip 
                 contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155' }}
-                formatter={(value: any) => [Number(value).toFixed(4), 'Value']}
+                formatter={(value: any) => [typeof value === 'number' ? value.toFixed(4) : value, 'Value']}
               />
               <ReferenceLine 
                 y={data.ucl} 
@@ -250,7 +250,7 @@ export default function SPCModule({ datasets }: { datasets: any[] }) {
                 strokeDasharray="5 5" 
                 label={{ 
                   position: 'right', 
-                  value: `UCL: ${data.ucl.toFixed(4)}`, 
+                  value: `UCL: ${typeof data.ucl === 'number' ? data.ucl.toFixed(4) : '--'}`, 
                   fill: '#ef4444', 
                   fontSize: 10, 
                   fontWeight: 'bold',
@@ -263,7 +263,7 @@ export default function SPCModule({ datasets }: { datasets: any[] }) {
                 strokeWidth={2}
                 label={{ 
                   position: 'right', 
-                  value: `CL: ${data.mean.toFixed(4)}`, 
+                  value: `CL: ${typeof data.mean === 'number' ? data.mean.toFixed(4) : '--'}`, 
                   fill: '#22c55e', 
                   fontSize: 10, 
                   fontWeight: 'bold',
@@ -276,7 +276,7 @@ export default function SPCModule({ datasets }: { datasets: any[] }) {
                 strokeDasharray="5 5" 
                 label={{ 
                   position: 'right', 
-                  value: `LCL: ${data.lcl.toFixed(4)}`, 
+                  value: `LCL: ${typeof data.lcl === 'number' ? data.lcl.toFixed(4) : '--'}`, 
                   fill: '#ef4444', 
                   fontSize: 10, 
                   fontWeight: 'bold',
@@ -438,7 +438,7 @@ export default function SPCModule({ datasets }: { datasets: any[] }) {
                     <h3 className="text-red-400 font-bold mb-2">⚠ Process Out of Control</h3>
                     <ul className="text-sm text-slate-300 space-y-1">
                       {spcData.violations.slice(0, 5).map((v: any, i: number) => (
-                        <li key={i}>Point {v.index}: {v.rule} (Value: {v.val.toFixed(4)})</li>
+                        <li key={i}>Point {v.index}: {v.rule} (Value: {typeof v.val === 'number' ? v.val.toFixed(4) : v.val})</li>
                       ))}
                       {spcData.violations.length > 5 && <li>...and {spcData.violations.length - 5} more violations.</li>}
                     </ul>

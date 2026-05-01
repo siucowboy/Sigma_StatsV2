@@ -26,6 +26,8 @@ const Plot = createPlotlyComponent(Plotly);
 
 import { 
   run1SampleTTest, 
+  run1SampleZTest,
+  run1SampleWilcoxon,
   run2SampleTTest, 
   calculateAndersonDarling, 
   generateQQData, 
@@ -35,6 +37,8 @@ import {
   runANOVA,
   runKruskalWallis,
   runWelchANOVA,
+  runTukeyHSD,
+  runNemenyi,
   runChiSquareGoodnessOfFit,
   runChiSquareIndependence,
   run1SampleProportion,
@@ -51,6 +55,12 @@ import {
 } from '../lib/stats';
 
 // --- Sub-components for cleaner UI ---
+const formatPropValue = (val: number, decimals: number = 4) => {
+  if (val === 0) return (0).toFixed(decimals);
+  if (Math.abs(val) < 0.001) return val.toExponential(decimals);
+  return val.toFixed(decimals);
+};
+
 const DiagnosticIndicator = ({ label, passed, pValue }: { label: string, passed: boolean, pValue: number }) => (
   <div className="flex items-center justify-between p-3 bg-slate-900/50 rounded border border-slate-700">
     <div>
@@ -93,9 +103,9 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
   const [s2Alt, setS2Alt] = useState('neq');
 
   const tabs = [
-    { id: '1-sample', label: '1-Sample T-Test' },
+    { id: '1-sample', label: '1-Sample' },
     { id: '2-sample', label: 'Two-Sample Analysis' },
-    { id: 'anova', label: 'ANOVA (3+ Groups)' },
+    { id: 'anova', label: '3 or more' },
     { id: 'chi-square', label: 'Chi-Squared' },
     { id: 'proportion', label: 'Proportions' },
     { id: 'poisson', label: 'Poisson' }
@@ -108,9 +118,10 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
   const [chiObsText, setChiObsText] = useState('20, 30\n35, 15');
   const [chiGOFObs, setChiGOFObs] = useState('50, 45, 60');
   const [chiGOFExp, setChiGOFExp] = useState('51.6, 51.6, 51.6');
+  const [chiAlt, setChiAlt] = useState('neq');
 
   // Proportion State
-  const [propType, setPropType] = useState<'1samp' | '2samp'>('2samp');
+  const [propType, setPropType] = useState<'1samp' | '2samp'>('1samp');
   const [pLabel1, setPLabel1] = useState('Sample A');
   const [pLabel2, setPLabel2] = useState('Sample B');
   const [pUnits1, setPUnits1] = useState<number | ''>(1000000);
@@ -123,7 +134,7 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
   
   const [pTarget, setPTarget] = useState<number | ''>(0.5);
   const [pPooled, setPPooled] = useState(true);
-  const [propAlt, setPropAlt] = useState('greater');
+  const [propAlt, setPropAlt] = useState('neq');
 
   // Poisson State
   const [poiType, setPoiType] = useState<'1samp' | '2samp'>('1samp');
@@ -134,6 +145,7 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
   const [poiEvents2, setPoiEvents2] = useState<number | ''>(18);
   const [poiSize2, setPoiSize2] = useState<number | ''>(100);
   const [poiTargetRate, setPoiTargetRate] = useState<number | ''>(0.12);
+  const [poiAlt, setPoiAlt] = useState('neq');
 
   // ANOVA State
   const [alpha, setAlpha] = useState(0.05);
@@ -143,15 +155,34 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
   const [anovaMultiIds, setAnovaMultiIds] = useState<string[]>(['', '', '']);
   const [anovaCustomLabels, setAnovaCustomLabels] = useState<string[]>(['Group 1', 'Group 2', 'Group 3']);
 
+  const [anovaAlt, setAnovaAlt] = useState('neq');
+
   // --- 1-Sample Calculations ---
   const s1Results = useMemo(() => {
     if (activeTab !== '1-sample' || !s1DataId || s1Target === '') return null;
     const data = datasets.find(d => d.id === s1DataId)?.values.filter((v: any) => typeof v === 'number' && !isNaN(v)) || [];
     if (data.length < 2) return null;
-    const res = run1SampleTTest(data, Number(s1Target), s1Alt);
-    const ci = getConfidenceInterval(data, 1 - alpha);
+    
     const norm = calculateAndersonDarling(data);
-    return { ...res, data, ci, norm, label: s1Label, significant: res.pValue < alpha };
+    const isNormal = norm.pValue > 0.05;
+    const n = data.length;
+    
+    let res;
+    let testUsed = '';
+    
+    if (!isNormal) {
+      res = run1SampleWilcoxon(data, Number(s1Target), s1Alt);
+      testUsed = '1-Sample Wilcoxon (Non-Normal)';
+    } else if (n > 30) {
+      res = run1SampleZTest(data, Number(s1Target), s1Alt);
+      testUsed = '1-Sample Z-Test (Normal, N > 30)';
+    } else {
+      res = run1SampleTTest(data, Number(s1Target), s1Alt);
+      testUsed = '1-Sample T-Test (Normal, N ≤ 30)';
+    }
+    
+    const ci = getConfidenceInterval(data, 1 - alpha);
+    return { ...res, data, ci, norm, isNormal, testUsed, label: s1Label, significant: res.pValue < alpha };
   }, [activeTab, s1DataId, s1Target, s1Alt, datasets, alpha, s1Label]);
 
   // --- 2-Sample Calculations & Diagnostics ---
@@ -368,9 +399,14 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
       pValue,
       testUsed,
       testResults,
-      significant: pValue < alpha
+      significant: pValue < alpha,
+      postHoc: (pValue < alpha) ? (
+        isNormal ? 
+          { type: 'Tukey', ...runTukeyHSD(groupDataArray, anovaRes.msWithin, anovaRes.dfWithin, groups.map(g => g.name)) } :
+          { type: 'Nemenyi', ...runNemenyi(groupDataArray, groups.map(g => g.name)) }
+      ) : null
     };
-  }, [activeTab, anovaInputType, anovaValueId, anovaGroupId, anovaMultiIds, alpha, datasets]);
+  }, [activeTab, anovaInputType, anovaValueId, anovaGroupId, anovaMultiIds, anovaAlt, alpha, datasets]);
 
   // --- Chi-Squared Calculations ---
   const chiResults = useMemo(() => {
@@ -385,7 +421,7 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
       if (matrix.length < 2 || matrix[0].length < 2) return null;
       return runChiSquareIndependence(matrix);
     }
-  }, [activeTab, chiType, chiGOFObs, chiGOFExp, chiObsText]);
+  }, [activeTab, chiType, chiGOFObs, chiGOFExp, chiObsText, chiAlt]);
 
   // --- Proportion Calculations ---
   const propResults = useMemo(() => {
@@ -420,7 +456,7 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
     if (activeTab !== 'poisson') return null;
     if (poiType === '1samp') {
       if (poiEvents1 === '' || poiSize1 === '' || poiTargetRate === '') return null;
-      const res = run1SamplePoisson(Number(poiEvents1), Number(poiSize1), Number(poiTargetRate), s2Alt, 1 - alpha);
+      const res = run1SamplePoisson(Number(poiEvents1), Number(poiSize1), Number(poiTargetRate), poiAlt, 1 - alpha);
       if (!res) return null;
       return { 
         ...res, 
@@ -432,9 +468,9 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
       };
     } else {
       if (poiEvents1 === '' || poiSize1 === '' || poiEvents2 === '' || poiSize2 === '') return null;
-      return { ...run2SamplePoisson(Number(poiEvents1), Number(poiSize1), Number(poiEvents2), Number(poiSize2), s2Alt, 1 - alpha), label1: poiLabel1, label2: poiLabel2 };
+      return { ...run2SamplePoisson(Number(poiEvents1), Number(poiSize1), Number(poiEvents2), Number(poiSize2), poiAlt, 1 - alpha), label1: poiLabel1, label2: poiLabel2 };
     }
-  }, [activeTab, poiType, poiEvents1, poiSize1, poiEvents2, poiSize2, poiTargetRate, s2Alt, poiLabel1, poiLabel2]);
+  }, [activeTab, poiType, poiEvents1, poiSize1, poiEvents2, poiSize2, poiTargetRate, poiAlt, poiLabel1, poiLabel2]);
 
   return (
     <div className="p-6 bg-slate-900 text-slate-100 min-h-screen">
@@ -658,6 +694,19 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                     </div>
                   </div>
                 )}
+
+                <div className="pt-2 border-t border-slate-700 mt-4">
+                  <label className="block text-xs uppercase text-slate-500 font-bold mb-2">Alternative (H₁)</label>
+                  <select 
+                    className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm text-slate-200" 
+                    value={anovaAlt} 
+                    onChange={e => setAnovaAlt(e.target.value)}
+                  >
+                    <option value="neq">Difference exists (≠)</option>
+                    <option value="greater">Increasing Trend (&gt;)</option>
+                    <option value="less">Decreasing Trend (&lt;)</option>
+                  </select>
+                </div>
               </div>
             )}
 
@@ -720,15 +769,54 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                     <input type="text" value={chiGOFExp} onChange={e => setChiGOFExp(e.target.value)} className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm" placeholder="e.g. 50, 50, 50" />
                   </>
                 )}
+                <div className="pt-2 border-t border-slate-700 mt-4">
+                  <label className="block text-xs uppercase text-slate-500 font-bold mb-2">Alternative (H₁)</label>
+                  <select 
+                    className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm text-slate-200" 
+                    value={chiAlt} 
+                    onChange={e => setChiAlt(e.target.value)}
+                  >
+                    <option value="neq">Difference exists (≠)</option>
+                  </select>
+                </div>
               </div>
             )}
 
             {activeTab === 'proportion' && (
               <div className="space-y-4">
-                <div className="p-3 bg-slate-800 rounded border border-slate-700">
-                  <label className="block text-[10px] uppercase text-sky-400 font-bold mb-2">Global Settings</label>
+                <label className="block text-xs uppercase text-slate-500 font-bold">Test Variant</label>
+                <div className="flex bg-slate-900 p-1 rounded border border-slate-700">
+                  <button 
+                    onClick={() => setPropType('1samp')}
+                    className={`flex-1 py-1 text-xs rounded transition font-bold ${propType === '1samp' ? 'bg-slate-700 text-white' : 'text-slate-500 hover:text-slate-300'}`}
+                  >
+                    1-Sample
+                  </button>
+                  <button 
+                    onClick={() => setPropType('2samp')}
+                    className={`flex-1 py-1 text-xs rounded transition font-bold ${propType === '2samp' ? 'bg-slate-700 text-white' : 'text-slate-500 hover:text-slate-300'}`}
+                  >
+                    2-Sample
+                  </button>
+                </div>
+
+                <div className="p-3 bg-slate-800 rounded border border-slate-700 space-y-3">
+                  <label className="block text-[10px] uppercase text-sky-400 font-bold mb-1 border-b border-sky-400/20 pb-1">Global Settings</label>
                   
-                  <div className="space-y-3">
+                  {propType === '1samp' && (
+                    <div>
+                      <label className="block text-[10px] text-slate-400 mb-1">Null Hypothesis (H₀: P = X)</label>
+                      <input 
+                        type="number" 
+                        value={pTarget} 
+                        onChange={e => setPTarget(e.target.value === '' ? '' : Number(e.target.value))}
+                        className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-xs text-sky-400 font-mono" 
+                        step="0.01"
+                        placeholder="0.5"
+                      />
+                    </div>
+                  )}
+                  {propType === '2samp' && (
                     <div>
                       <label className="block text-[10px] text-slate-400 mb-1">Null Hypothesis (H₀: Diff)</label>
                       <input 
@@ -738,20 +826,32 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                         className="w-full bg-green-500/20 border border-green-500/50 rounded p-1 text-xs text-green-400 font-mono" 
                       />
                     </div>
-                    
-                    <div>
-                      <label className="block text-[10px] text-slate-400 mb-1">Alternate Hypothesis (H₁)</label>
-                      <select 
-                        value={propAlt} 
-                        onChange={e => setPropAlt(e.target.value)}
-                        className="w-full bg-green-500/20 border border-green-500/50 rounded p-1 text-xs text-green-400 font-bold cursor-pointer"
-                      >
-                        <option value="neq">P1 ≠ P2</option>
-                        <option value="greater">P1 {'>'} P2</option>
-                        <option value="less">P1 {'<'} P2</option>
-                      </select>
-                    </div>
+                  )}
+                  
+                  <div>
+                    <label className="block text-[10px] text-slate-400 mb-1">Alternate Hypothesis (H₁)</label>
+                    <select 
+                      value={propAlt} 
+                      onChange={e => setPropAlt(e.target.value)}
+                      className="w-full bg-green-500/20 border border-green-500/50 rounded p-1 text-xs text-green-400 font-bold cursor-pointer"
+                    >
+                      {propType === '1samp' ? (
+                        <>
+                          <option value="neq">P1 ≠ Target</option>
+                          <option value="greater">P1 {'>'} Target</option>
+                          <option value="less">P1 {'<'} Target</option>
+                        </>
+                      ) : (
+                        <>
+                          <option value="neq">P1 ≠ P2</option>
+                          <option value="greater">P1 {'>'} P2</option>
+                          <option value="less">P1 {'<'} P2</option>
+                        </>
+                      )}
+                    </select>
+                  </div>
 
+                  {propType === '2samp' && (
                     <div>
                       <label className="block text-[10px] text-slate-400 mb-1">Use pooled est of p?</label>
                       <select 
@@ -763,143 +863,172 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                         <option value="N">N</option>
                       </select>
                     </div>
+                  )}
 
-                    <div>
-                      <label className="block text-[10px] text-slate-400 mb-1">Confidence</label>
-                      <div className="bg-green-500/20 border border-green-500/50 rounded p-1 text-xs text-green-400 font-mono">
-                        {(1 - alpha).toFixed(2)}
+                  <div>
+                    <label className="block text-[10px] text-slate-400 mb-1">Confidence</label>
+                    <div className="bg-green-500/20 border border-green-500/50 rounded p-1 text-xs text-green-400 font-mono">
+                      {(1 - alpha).toFixed(2)}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="p-3 bg-slate-800 rounded border border-slate-700">
+                    <label className="block text-[10px] uppercase text-sky-400 font-bold mb-2 border-b border-sky-400/20 pb-1">{pLabel1} (Sample Data)</label>
+                    <div className="mb-2">
+                      <label className="block text-[10px] text-slate-500 font-bold mb-1 uppercase">Sample Name</label>
+                      <input 
+                        type="text" 
+                        value={pLabel1} 
+                        onChange={e => setPLabel1(e.target.value)} 
+                        className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-xs text-sky-400"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-[10px] text-slate-500 font-bold uppercase">Units</label>
+                        <input type="number" value={pUnits1} onChange={e => setPUnits1(e.target.value === '' ? '' : Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-xs" />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] text-slate-500 font-bold uppercase">Opps / Unit</label>
+                        <input type="number" value={pOpps1} onChange={e => setPOpps1(e.target.value === '' ? '' : Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-xs" />
                       </div>
                     </div>
+                    <div className="mt-2 text-center py-1 bg-slate-900/50 border border-slate-700 rounded mb-2">
+                      <span className="text-[10px] text-slate-500 mr-2 uppercase">Total Opps (N1):</span>
+                      <span className="text-xs font-mono text-cyan-400">{(Number(pUnits1) * Number(pOpps1)).toLocaleString()}</span>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-slate-500 font-bold uppercase">Defects (X1)</label>
+                      <input type="number" value={pEvents1} onChange={e => setPEvents1(e.target.value === '' ? '' : Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-xs text-amber-400 font-bold" />
+                    </div>
                   </div>
-                </div>
 
-                <div className="p-3 bg-slate-800 rounded border border-slate-700">
-                  <label className="block text-[10px] uppercase text-sky-400 font-bold mb-2">{pLabel1} Inputs</label>
-                  <div className="mb-2">
-                    <label className="block text-[10px] text-slate-500 font-bold mb-1">Sample Name</label>
-                    <input 
-                      type="text" 
-                      value={pLabel1} 
-                      onChange={e => setPLabel1(e.target.value)} 
-                      className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-xs text-sky-400"
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-[10px] text-slate-500 font-bold">Units</label>
-                      <input type="number" value={pUnits1} onChange={e => setPUnits1(e.target.value === '' ? '' : Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-xs" />
+                  {propType === '2samp' && (
+                    <div className="p-3 bg-slate-800 rounded border border-slate-700">
+                      <label className="block text-[10px] uppercase text-sky-400 font-bold mb-2 border-b border-sky-400/20 pb-1">{pLabel2} (Sample Data)</label>
+                      <div className="mb-2">
+                        <label className="block text-[10px] text-slate-500 font-bold mb-1 uppercase">Sample Name</label>
+                        <input 
+                          type="text" 
+                          value={pLabel2} 
+                          onChange={e => setPLabel2(e.target.value)} 
+                          className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-xs text-sky-400"
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[10px] text-slate-500 font-bold uppercase">Units</label>
+                          <input type="number" value={pUnits2} onChange={e => setPUnits2(e.target.value === '' ? '' : Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-xs" />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] text-slate-500 font-bold uppercase">Opps / Unit</label>
+                          <input type="number" value={pOpps2} onChange={e => setPOpps2(e.target.value === '' ? '' : Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-xs" />
+                        </div>
+                      </div>
+                      <div className="mt-2 text-center py-1 bg-slate-900/50 border border-slate-700 rounded mb-2">
+                        <span className="text-[10px] text-slate-500 mr-2 uppercase">Total Opps (N2):</span>
+                        <span className="text-xs font-mono text-cyan-400">{(Number(pUnits2) * Number(pOpps2)).toLocaleString()}</span>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] text-slate-500 font-bold uppercase">Defects (X2)</label>
+                        <input type="number" value={pEvents2} onChange={e => setPEvents2(e.target.value === '' ? '' : Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-xs text-amber-400 font-bold" />
+                      </div>
                     </div>
-                    <div>
-                      <label className="block text-[10px] text-slate-500 font-bold">Opps / Unit</label>
-                      <input type="number" value={pOpps1} onChange={e => setPOpps1(e.target.value === '' ? '' : Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-xs" />
-                    </div>
-                  </div>
-                  <div className="mt-2 text-center py-1 bg-slate-900/50 border border-slate-700 rounded mb-2">
-                    <span className="text-[10px] text-slate-500 mr-2 uppercase">Total Opps (N1):</span>
-                    <span className="text-xs font-mono text-cyan-400">{(Number(pUnits1) * Number(pOpps1)).toLocaleString()}</span>
-                  </div>
-                  <label className="block text-[10px] text-slate-500 font-bold">Defects (X1)</label>
-                  <input type="number" value={pEvents1} onChange={e => setPEvents1(e.target.value === '' ? '' : Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-xs text-amber-400 font-bold" />
-                </div>
-
-                <div className="p-3 bg-slate-800 rounded border border-slate-700">
-                  <label className="block text-[10px] uppercase text-sky-400 font-bold mb-2">{pLabel2} Inputs</label>
-                  <div className="mb-2">
-                    <label className="block text-[10px] text-slate-500 font-bold mb-1">Sample Name</label>
-                    <input 
-                      type="text" 
-                      value={pLabel2} 
-                      onChange={e => setPLabel2(e.target.value)} 
-                      className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-xs text-sky-400"
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-[10px] text-slate-500 font-bold">Units</label>
-                      <input type="number" value={pUnits2} onChange={e => setPUnits2(e.target.value === '' ? '' : Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-xs" />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] text-slate-500 font-bold">Opps / Unit</label>
-                      <input type="number" value={pOpps2} onChange={e => setPOpps2(e.target.value === '' ? '' : Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-xs" />
-                    </div>
-                  </div>
-                  <div className="mt-2 text-center py-1 bg-slate-900/50 border border-slate-700 rounded mb-2">
-                    <span className="text-[10px] text-slate-500 mr-2 uppercase">Total Opps (N2):</span>
-                    <span className="text-xs font-mono text-cyan-400">{(Number(pUnits2) * Number(pOpps2)).toLocaleString()}</span>
-                  </div>
-                  <label className="block text-[10px] text-slate-500 font-bold">Defects (X2)</label>
-                  <input type="number" value={pEvents2} onChange={e => setPEvents2(e.target.value === '' ? '' : Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-xs text-amber-400 font-bold" />
+                  )}
                 </div>
               </div>
             )}
 
             {activeTab === 'poisson' && (
               <div className="space-y-4">
-                <label className="block text-xs uppercase text-slate-500 font-bold">Groups</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <input 
-                    type="text" 
-                    value={poiLabel1} 
-                    onChange={e => setPoiLabel1(e.target.value)} 
-                    className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-[10px] text-sky-400" 
-                    placeholder="Name A"
-                  />
-                  <input 
-                    type="text" 
-                    value={poiLabel2} 
-                    onChange={e => setPoiLabel2(e.target.value)} 
-                    className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-[10px] text-sky-400" 
-                    placeholder="Name B"
-                  />
-                </div>
                 <label className="block text-xs uppercase text-slate-500 font-bold">Test Variant</label>
                 <div className="flex bg-slate-900 p-1 rounded border border-slate-700">
                   <button 
                     onClick={() => setPoiType('1samp')}
-                    className={`flex-1 py-1 text-xs rounded transition ${poiType === '1samp' ? 'bg-slate-700 text-white' : 'text-slate-500 hover:text-slate-300'}`}
+                    className={`flex-1 py-1 text-xs rounded transition font-bold ${poiType === '1samp' ? 'bg-slate-700 text-white' : 'text-slate-500 hover:text-slate-300'}`}
                   >
                     1-Sample
                   </button>
                   <button 
                     onClick={() => setPoiType('2samp')}
-                    className={`flex-1 py-1 text-xs rounded transition ${poiType === '2samp' ? 'bg-slate-700 text-white' : 'text-slate-500 hover:text-slate-300'}`}
+                    className={`flex-1 py-1 text-xs rounded transition font-bold ${poiType === '2samp' ? 'bg-slate-700 text-white' : 'text-slate-500 hover:text-slate-300'}`}
                   >
                     2-Sample
                   </button>
                 </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-[10px] uppercase text-slate-500 font-bold mb-1">Occurrences (X1)</label>
-                    <input type="number" value={poiEvents1} onChange={e => setPoiEvents1(e.target.value === '' ? '' : Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm" />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] uppercase text-slate-500 font-bold mb-1">Sample Size (N1)</label>
-                    <input type="number" value={poiSize1} onChange={e => setPoiSize1(e.target.value === '' ? '' : Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm" />
+
+                <div className="p-3 bg-slate-800 rounded border border-slate-700 space-y-3">
+                  <label className="block text-[10px] uppercase text-purple-400 font-bold mb-1 border-b border-purple-500/20 pb-1">Global Parameters</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {poiType === '1samp' && (
+                      <div>
+                        <label className="block text-[10px] text-slate-400 mb-1">Null Rate (λ₀)</label>
+                        <input 
+                          type="number" 
+                          value={poiTargetRate} 
+                          onChange={e => setPoiTargetRate(e.target.value === '' ? '' : Number(e.target.value))}
+                          className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm text-purple-400" 
+                          step="0.1" 
+                        />
+                      </div>
+                    )}
+                    
+                    <div>
+                      <label className="block text-[10px] text-slate-400 mb-1">Alternative (H₁)</label>
+                      <select 
+                        className="w-full bg-purple-500/10 border border-purple-500/50 rounded p-2 text-xs text-purple-400 font-bold cursor-pointer" 
+                        value={poiAlt} 
+                        onChange={e => setPoiAlt(e.target.value)}
+                      >
+                         <option value="neq">{poiType === '1samp' ? `Rate ≠ Target` : `Rate1 ≠ Rate2`}</option>
+                         <option value="greater">{poiType === '1samp' ? `Rate > Target` : `Rate1 > Rate2`}</option>
+                         <option value="less">{poiType === '1samp' ? `Rate < Target` : `Rate1 < Rate2`}</option>
+                      </select>
+                    </div>
                   </div>
                 </div>
-                {poiType === '2samp' ? (
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-[10px] uppercase text-slate-500 font-bold mb-1">Occurrences (X2)</label>
-                      <input type="number" value={poiEvents2} onChange={e => setPoiEvents2(e.target.value === '' ? '' : Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm" />
+
+                <div className="space-y-4">
+                  <div className="p-3 bg-slate-800 rounded border border-slate-700">
+                    <label className="block text-[10px] uppercase text-sky-400 font-bold mb-2 border-b border-sky-400/20 pb-1">{(poiResults as any)?.label1 || 'Sample A'} Inputs</label>
+                    <div className="mb-2">
+                      <label className="block text-[10px] text-slate-500 font-bold mb-1 uppercase">Sample Name</label>
+                      <input type="text" value={poiLabel1} onChange={e => setPoiLabel1(e.target.value)} className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-xs text-sky-400" />
                     </div>
-                    <div>
-                      <label className="block text-[10px] uppercase text-slate-500 font-bold mb-1">Sample Size (N2)</label>
-                      <input type="number" value={poiSize2} onChange={e => setPoiSize2(e.target.value === '' ? '' : Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm" />
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-[10px] text-slate-500 font-bold uppercase">Occurrences (X1)</label>
+                        <input type="number" value={poiEvents1} onChange={e => setPoiEvents1(e.target.value === '' ? '' : Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm text-amber-400" />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] text-slate-500 font-bold uppercase">Sample size (N1)</label>
+                        <input type="number" value={poiSize1} onChange={e => setPoiSize1(e.target.value === '' ? '' : Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm text-sky-400" />
+                      </div>
                     </div>
                   </div>
-                ) : (
-                  <>
-                    <label className="block text-xs uppercase text-slate-500 font-bold">Null Rate (λ₀)</label>
-                    <input type="number" value={poiTargetRate} onChange={e => setPoiTargetRate(e.target.value === '' ? '' : Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm" step="0.1" />
-                  </>
-                )}
-                <label className="block text-xs uppercase text-slate-500 font-bold">Alternative (H₁)</label>
-                <select className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm" value={s2Alt} onChange={e => setS2Alt(e.target.value)}>
-                   <option value="neq">{poiType === '1samp' ? `${poiLabel1} ≠ Target` : `${poiLabel1} ≠ ${poiLabel2}`}</option>
-                   <option value="greater">{poiType === '1samp' ? `${poiLabel1} > Target` : `${poiLabel1} > ${poiLabel2}`}</option>
-                   <option value="less">{poiType === '1samp' ? `${poiLabel1} < Target` : `${poiLabel1} < ${poiLabel2}`}</option>
-                </select>
+
+                  {poiType === '2samp' && (
+                    <div className="p-3 bg-slate-800 rounded border border-slate-700">
+                      <label className="block text-[10px] uppercase text-sky-400 font-bold mb-2 border-b border-sky-400/20 pb-1">{(poiResults as any)?.label2 || 'Sample B'} Inputs</label>
+                      <div className="mb-2">
+                        <label className="block text-[10px] text-slate-500 font-bold mb-1 uppercase">Sample Name</label>
+                        <input type="text" value={poiLabel2} onChange={e => setPoiLabel2(e.target.value)} className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-xs text-sky-400" />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[10px] text-slate-500 font-bold uppercase">Occurrences (X2)</label>
+                          <input type="number" value={poiEvents2} onChange={e => setPoiEvents2(e.target.value === '' ? '' : Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm text-amber-400" />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] text-slate-500 font-bold uppercase">Sample size (N2)</label>
+                          <input type="number" value={poiSize2} onChange={e => setPoiSize2(e.target.value === '' ? '' : Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm text-sky-400" />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
@@ -930,18 +1059,39 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
         <div className="lg:col-span-3 space-y-6">
           {activeTab === '1-sample' && (
             <div className="bg-slate-800 p-6 rounded-lg border border-slate-700 shadow-xl space-y-8">
-              <h3 className="text-xl font-bold">1-Sample T-Test Analysis</h3>
+              <h3 className="text-xl font-bold">1-Sample Analysis{s1Results && `: ${s1Results.testUsed}`}</h3>
               {!s1Results ? (
                 <div className="h-64 flex items-center justify-center border border-dashed border-slate-700 rounded text-slate-500 italic">
                   Complete settings to run analysis.
                 </div>
               ) : (
                 <div className="space-y-8">
+                  {/* Diagnostics Row */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <ExportWrapper fileName="1sample-diagnostics">
+                      <div className="bg-slate-900/40 p-4 rounded-lg border border-slate-700/50">
+                        <h4 className="text-xs font-bold text-slate-500 mb-3 flex items-center gap-2 uppercase tracking-tight">
+                          <Activity size={14} className="text-emerald-400" /> Normality Check
+                        </h4>
+                        <DiagnosticIndicator label={s1Label} passed={s1Results.isNormal} pValue={s1Results.norm.pValue} />
+                        <div className="mt-4 text-[10px] text-slate-500">
+                          Routing Logic: {s1Results.testUsed} selected based on normality and sample size.
+                        </div>
+                      </div>
+                    </ExportWrapper>
+                  </div>
+
                   <ExportWrapper fileName="1sample-summary">
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-center">
+                    <div className="grid grid-cols-1 md:grid-cols-5 gap-4 text-center">
                       <div className="bg-slate-900 p-4 rounded border border-slate-700">
-                        <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">Mean</div>
+                        <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">Estimate</div>
                         <div className="text-2xl font-mono text-red-500 font-bold">{s1Results.mean.toFixed(3)}</div>
+                      </div>
+                      <div className="bg-slate-900 p-4 rounded border border-slate-700">
+                        <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">Alternative (H₁)</div>
+                        <div className="text-xs mt-2 font-bold text-sky-400">
+                          {s1Alt === 'neq' ? '≠' : s1Alt === 'greater' ? '>' : '<'} Target
+                        </div>
                       </div>
                       <div className="bg-slate-900 p-4 rounded border border-slate-700">
                         <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">P-Value</div>
@@ -950,7 +1100,9 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                         </div>
                       </div>
                       <div className="bg-slate-900 p-4 rounded border border-slate-700">
-                        <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">T-Value</div>
+                        <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">
+                          {s1Results.testUsed.includes('T-Test') ? 'T-Value' : (s1Results.testUsed.includes('Z-Test') ? 'Z-Value' : 'W-Value')}
+                        </div>
                         <div className="text-2xl font-mono text-slate-200">{s1Results.statistic.toFixed(3)}</div>
                       </div>
                       <div className="bg-slate-900 p-4 rounded border border-slate-700">
@@ -1005,14 +1157,16 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                     <ExportWrapper fileName="1sample-conclusion">
                       <div className="bg-slate-900 p-4 rounded border border-slate-700 flex flex-col justify-center h-full">
                         <p className="text-xs text-slate-200 leading-relaxed italic border-l-4 border-sky-600 pl-4 py-2">
-                          "With a P-Value of {s1Results.pValue.toFixed(4)}, we {s1Results.significant ? 'have' : 'do not have'} sufficient evidence to suggest the population mean is {s1Alt === 'neq' ? 'different from' : s1Alt === 'greater' ? 'greater than' : 'less than'} {s1Target}."
+                          "With a P-Value of {s1Results.pValue.toFixed(4)}, we {s1Results.significant ? 'have' : 'do not have'} sufficient evidence to suggest a {s1Alt === 'neq' ? 'difference exists' : s1Alt === 'greater' ? 'greater value' : 'lesser value'} relative to {s1Target}."
                         </p>
                         <div className="mt-4 grid grid-cols-2 gap-2 text-[10px] text-slate-500 font-mono">
                            <div className="bg-slate-800/50 p-2 rounded">N: {s1Results.n}</div>
-                           <div className="bg-slate-800/50 p-2 rounded">StDev: {s1Results.sd.toFixed(3)}</div>
+                           <div className="bg-slate-800/50 p-2 rounded">StDev: {s1Results.sd?.toFixed(3) || '--'}</div>
                            <div className="bg-slate-800/50 p-2 rounded">Target: {s1Target}</div>
                            <div className="bg-slate-900/50 p-2 rounded">{(1 - alpha).toFixed(2)} CI: [{s1Results.ci.lcl.toFixed(2)}, {s1Results.ci.ucl.toFixed(2)}]</div>
-                           <div className="bg-slate-800/50 p-2 rounded">DF: {s1Results.df}</div>
+                           <div className="bg-slate-800/50 p-2 rounded">
+                             {s1Results.testUsed.includes('T-Test') ? `DF: ${s1Results.df}` : `Test: ${s1Results.testUsed.split(' ')[1]}`}
+                           </div>
                         </div>
                       </div>
                     </ExportWrapper>
@@ -1024,7 +1178,7 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
 
           {activeTab === '2-sample' && (
             <div className="bg-slate-800 p-6 rounded-lg border border-slate-700 shadow-xl space-y-8">
-              <h3 className="text-xl font-bold">2-Sample Analysis Results</h3>
+              <h3 className="text-xl font-bold">2-Sample Analysis Results{s2Analysis && `: ${s2Analysis.testType}`}</h3>
               
               {!s2Analysis ? (
                 <div className="h-64 flex items-center justify-center border border-dashed border-slate-700 rounded text-slate-500 italic">
@@ -1198,7 +1352,13 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                               </table>
                             </div>
 
-                            <div className="mt-6 grid grid-cols-2 gap-4">
+                            <div className="mt-6 grid grid-cols-2 md:grid-cols-3 gap-4">
+                              <div className="bg-slate-900/50 p-3 rounded border border-slate-700">
+                                  <p className="text-[10px] text-slate-500 uppercase font-bold mb-1">Alternative (H₁)</p>
+                                  <p className="text-xl font-mono font-bold text-sky-400">
+                                    {s2Alt === 'neq' ? '≠' : s2Alt === 'greater' ? '>' : '<'}
+                                  </p>
+                              </div>
                               <div className="bg-slate-900/50 p-3 rounded border border-slate-700">
                                   <p className="text-[10px] text-slate-500 uppercase font-bold mb-1">Estimate for difference</p>
                                   <p className="text-xl font-mono font-bold text-red-500">
@@ -1313,7 +1473,7 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
 
           {activeTab === 'anova' && (
             <div className="bg-slate-800 p-6 rounded-lg border border-slate-700 shadow-xl space-y-8">
-              <h3 className="text-xl font-bold">ANOVA (3 or More Groups) Analysis</h3>
+              <h3 className="text-xl font-bold">3 or More Groups Analysis{anovaAnalysis && `: ${anovaAnalysis.testUsed}`}</h3>
               {!anovaAnalysis ? (
                 <div className="h-64 flex items-center justify-center border border-dashed border-slate-700 rounded text-slate-500 italic">
                   Select at least 2 groups with valid data to run ANOVA.
@@ -1322,7 +1482,7 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                 <div className="space-y-8">
                   {/* Summary Metric Strip */}
                   <ExportWrapper fileName="anova-summary">
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-center">
+                    <div className="grid grid-cols-1 md:grid-cols-5 gap-4 text-center">
                       <div className="bg-slate-900 p-4 rounded border border-slate-700">
                         <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">Test Value</div>
                         <div className="text-2xl font-mono text-red-500 font-bold">
@@ -1339,6 +1499,12 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                         <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">Test Used</div>
                         <div className="text-xs mt-2 font-bold text-slate-300">
                           {anovaAnalysis.testUsed}
+                        </div>
+                      </div>
+                      <div className="bg-slate-900 p-4 rounded border border-slate-700">
+                        <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">Alternative (H₁)</div>
+                        <div className="text-xs mt-2 font-bold text-sky-400">
+                          {anovaAlt === 'neq' ? 'Diff exists (≠)' : anovaAlt === 'greater' ? 'Incr. Trend (>)' : 'Decr. Trend (<)'}
                         </div>
                       </div>
                       <div className="bg-slate-900 p-4 rounded border border-slate-700">
@@ -1441,10 +1607,53 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                           <h5 className="text-[10px] font-bold text-sky-400 uppercase mb-2 italic">Conclusion</h5>
                           <p className="text-xs text-slate-400 leading-relaxed">
                             {anovaAnalysis.significant ? 
-                              `We reject the null hypothesis at the ${alpha} significance level. Evidence suggests at least one group mean is significantly different from the others.` : 
-                              `We fail to reject the null hypothesis at the ${alpha} level. There is insufficient evidence to conclude that any group mean differs significantly.`}
+                              `We reject the null hypothesis at the ${alpha} significance level. Evidence suggests at least one group is significantly different from the others.` : 
+                              `We fail to reject the null hypothesis at the ${alpha} level. There is insufficient evidence to conclude that any group differs significantly.`}
                           </p>
                         </div>
+
+                        {anovaAnalysis.postHoc && (
+                          <div className="mt-8 bg-slate-950/50 p-4 rounded border border-slate-800/50">
+                            <h4 className="text-xs font-bold text-sky-500 uppercase mb-4 text-center tracking-widest">
+                              Post-Hoc: {anovaAnalysis.postHoc.type}'s Comparison
+                            </h4>
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-[10px]">
+                                <thead>
+                                  <tr className="border-b border-slate-700">
+                                    <th className="py-2 text-left text-slate-500 uppercase">Comparison</th>
+                                    <th className="py-2 text-center text-slate-500 uppercase">Difference</th>
+                                    <th className="py-2 text-center text-slate-500 uppercase">Test Stat</th>
+                                    <th className="py-2 text-center text-slate-500 uppercase">Significance</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {anovaAnalysis.postHoc.comparisons.map((comp: any, idx: number) => (
+                                    <tr key={idx} className="border-b border-slate-800/30">
+                                      <td className="py-2 text-slate-300 font-medium">{comp.groupA} <span className="text-slate-600 px-1">vs</span> {comp.groupB}</td>
+                                      <td className={`py-2 text-center font-mono ${comp.isSignificant ? 'text-amber-500' : 'text-slate-500'}`}>
+                                        {(comp.diff !== undefined ? comp.diff : comp.rankDiff).toFixed(3)}
+                                      </td>
+                                      <td className="py-2 text-center text-slate-500 font-mono">
+                                        {(comp.q || comp.stat).toFixed(3)}
+                                      </td>
+                                      <td className="py-2 text-center">
+                                        {comp.isSignificant ? (
+                                          <span className="bg-red-900/30 text-red-400 px-2 py-0.5 rounded text-[8px] font-bold uppercase ring-1 ring-red-400/30">Significant</span>
+                                        ) : (
+                                          <span className="text-slate-600">N.S.</span>
+                                        )}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                            <p className="mt-4 text-[8px] text-slate-600 italic">
+                               * Pairwise comparisons evaluated at {alpha} level (Critical Q: {anovaAnalysis.postHoc.qCrit.toFixed(2)})
+                            </p>
+                          </div>
+                        )}
                       </div>
                     </ExportWrapper>
                   </div>
@@ -1463,10 +1672,16 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
               ) : (
                 <div className="space-y-8">
                   <ExportWrapper fileName="chi-summary">
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-center">
+                    <div className="grid grid-cols-1 md:grid-cols-5 gap-4 text-center">
                       <div className="bg-slate-900 p-4 rounded border border-slate-700">
                         <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">Chi-Square</div>
                         <div className="text-2xl font-mono text-amber-500 font-bold">{chiResults.statistic.toFixed(3)}</div>
+                      </div>
+                      <div className="bg-slate-900 p-4 rounded border border-slate-700">
+                        <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">Alternative (H₁)</div>
+                        <div className="text-xs mt-2 font-bold text-sky-400">
+                          Difference exists (≠)
+                        </div>
                       </div>
                       <div className="bg-slate-900 p-4 rounded border border-slate-700">
                         <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">P-Value</div>
@@ -1539,7 +1754,9 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
           {activeTab === 'proportion' && (
             <div className="bg-slate-900 p-6 rounded-lg border border-slate-800 shadow-2xl space-y-8 min-h-[800px]">
               <div className="flex justify-between items-center bg-slate-800/50 p-4 rounded-t-lg border-b border-slate-700 -mx-6 -mt-6 mb-6">
-                <h3 className="text-2xl font-black italic text-sky-400 uppercase tracking-tighter">Test of Two Proportions Output</h3>
+                <h3 className="text-2xl font-black italic text-sky-400 uppercase tracking-tighter">
+                  {propType === '1samp' ? '1-Sample Proportion Analysis' : '2-Sample Proportion Analysis'}
+                </h3>
                 <div className="flex gap-4 text-[10px] font-bold text-slate-500">
                   <span className="flex items-center gap-1"><Activity size={12}/> ENGINE: SIGMA-6</span>
                   <span className="flex items-center gap-1"><TrendingUp size={12}/> CONFIDENCE: {(1-alpha)*100}%</span>
@@ -1560,19 +1777,23 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                         <ResponsiveContainer width="100%" height="100%">
                           <ComposedChart
                             layout="vertical"
-                            data={[
-                              { name: (propResults as any).label1, low: (propResults as any).ci1.lower, high: (propResults as any).ci1.upper, nominal: (propResults as any).ci1.nominal },
-                              { name: (propResults as any).label2, low: (propResults as any).ci2.lower, high: (propResults as any).ci2.upper, nominal: (propResults as any).ci2.nominal }
-                            ]}
+                            data={
+                              propType === '1samp' 
+                                ? [{ name: (propResults as any).label1, range: [(propResults as any).ci1.lower, (propResults as any).ci1.upper], nominal: (propResults as any).ci1.nominal }]
+                                : [
+                                    { name: (propResults as any).label1, range: [(propResults as any).ci1.lower, (propResults as any).ci1.upper], nominal: (propResults as any).ci1.nominal },
+                                    { name: (propResults as any).label2, range: [(propResults as any).ci2.lower, (propResults as any).ci2.upper], nominal: (propResults as any).ci2.nominal }
+                                  ]
+                            }
                             margin={{ top: 20, right: 30, left: 20, bottom: 20 }}
                           >
                             <CartesianGrid stroke="#1e293b" />
                             <XAxis 
                               type="number" 
-                              domain={[0, 'auto']} 
+                              domain={[0, 1]} 
                               stroke="#64748b" 
                               fontSize={10} 
-                              tickFormatter={(v) => v.toExponential(1)}
+                              tickFormatter={(v) => typeof v === 'number' ? formatPropValue(v, 3) : v}
                             />
                             <YAxis 
                               type="category" 
@@ -1583,23 +1804,31 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                             />
                             <Tooltip 
                               contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155' }}
-                              formatter={(v: number) => v.toExponential(4)}
+                              formatter={(v: any) => Array.isArray(v) ? `${formatPropValue(v[0])} - ${formatPropValue(v[1])}` : (typeof v === 'number' ? formatPropValue(v) : v)}
                             />
-                            <Bar dataKey="low" fill="transparent" stackId="a" />
-                            <Bar dataKey="high" fill="#38bdf844" stackId="a" radius={[0, 4, 4, 0]} />
+                            <Bar dataKey="range" fill="#38bdf844" radius={[0, 4, 4, 0]} barSize={8} />
+                            {propType === '1samp' && (
+                              <ReferenceLine x={Number(pTarget)} stroke="#ef4444" strokeDasharray="3 3" label={{ position: 'top', value: `Target: ${pTarget}`, fill: '#ef4444', fontSize: 10 }} />
+                            )}
                             <Scatter dataKey="nominal" fill="#38bdf8" shape="square" />
                           </ComposedChart>
                         </ResponsiveContainer>
                       </div>
-                      <div className="mt-4 grid grid-cols-2 gap-4">
+                      <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div className="text-center p-2 rounded bg-slate-900 border border-slate-800">
-                          <div className="text-[10px] text-slate-500 uppercase font-bold mb-1">P(A) Error Bar</div>
-                          <div className="text-xs text-sky-400 font-mono">{(propResults as any).ci1.lower.toExponential(3)} ↔ {(propResults as any).ci1.upper.toExponential(3)}</div>
+                          <div className="text-[10px] text-slate-500 uppercase font-bold mb-1">{(propResults as any).label1} Interval</div>
+                          <div className="text-xs text-sky-400 font-mono">
+                            {typeof (propResults as any).ci1.lower === 'number' ? formatPropValue((propResults as any).ci1.lower) : '--'} ↔ {typeof (propResults as any).ci1.upper === 'number' ? formatPropValue((propResults as any).ci1.upper) : '--'}
+                          </div>
                         </div>
-                        <div className="text-center p-2 rounded bg-slate-900 border border-slate-800">
-                          <div className="text-[10px] text-slate-500 uppercase font-bold mb-1">P(B) Error Bar</div>
-                          <div className="text-xs text-sky-400 font-mono">{(propResults as any).ci2.lower.toExponential(3)} ↔ {(propResults as any).ci2.upper.toExponential(3)}</div>
-                        </div>
+                        {propType === '2samp' && (
+                          <div className="text-center p-2 rounded bg-slate-900 border border-slate-800">
+                            <div className="text-[10px] text-slate-500 uppercase font-bold mb-1">{(propResults as any).label2} Interval</div>
+                            <div className="text-xs text-sky-400 font-mono">
+                              {typeof (propResults as any).ci2.lower === 'number' ? formatPropValue((propResults as any).ci2.lower) : '--'} ↔ {typeof (propResults as any).ci2.upper === 'number' ? formatPropValue((propResults as any).ci2.upper) : '--'}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -1623,19 +1852,19 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                           <tbody className="divide-y divide-slate-900">
                             <tr>
                               <td className="py-2 text-slate-400">Upper Limit</td>
-                              <td className="text-right text-red-500">{(propResults as any).ci1.upper.toExponential(4)}</td>
+                              <td className="text-right text-red-500">{typeof (propResults as any).ci1.upper === 'number' ? formatPropValue((propResults as any).ci1.upper) : '--'}</td>
                               <td className="text-right text-slate-400">{Math.round((propResults as any).ci1.upper * 1000000)}</td>
                               <td className="text-right text-red-500">{Math.round((propResults as any).ci1.upper * (propResults as any).n1)}</td>
                             </tr>
                             <tr className="bg-slate-900/50">
                               <td className="py-2 text-white font-bold tracking-wider">NOMINAL</td>
-                              <td className="text-right text-white font-bold">{(propResults as any).ci1.nominal.toExponential(4)}</td>
+                              <td className="text-right text-white font-bold">{typeof (propResults as any).ci1.nominal === 'number' ? formatPropValue((propResults as any).ci1.nominal) : '--'}</td>
                               <td className="text-right text-white font-bold">{Math.round((propResults as any).ci1.nominal * 1000000)}</td>
                               <td className="text-right text-white font-bold">{(propResults as any).e1}</td>
                             </tr>
                             <tr>
                               <td className="py-2 text-slate-400">Lower Limit</td>
-                              <td className="text-right text-green-500">{(propResults as any).ci1.lower.toExponential(4)}</td>
+                              <td className="text-right text-green-500">{typeof (propResults as any).ci1.lower === 'number' ? formatPropValue((propResults as any).ci1.lower) : '--'}</td>
                               <td className="text-right text-slate-400">{Math.round((propResults as any).ci1.lower * 1000000)}</td>
                               <td className="text-right text-green-500">{Math.round((propResults as any).ci1.lower * (propResults as any).n1)}</td>
                             </tr>
@@ -1644,121 +1873,141 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                       </div>
 
                       {/* {pLabel2} Result Box */}
-                      <div className="bg-slate-950 p-4 rounded border-l-4 border-l-blue-500 border-y border-r border-slate-800">
-                        <div className="flex justify-between items-center mb-4">
-                          <span className="text-xs font-black text-blue-500 uppercase">{(propResults as any).label2} Results</span>
-                          <span className="text-[10px] text-slate-500 bg-slate-900 px-2 py-0.5 rounded">N = {(propResults as any).n2.toLocaleString()}</span>
-                        </div>
-                        <table className="w-full text-xs font-mono">
-                          <thead>
-                            <tr className="text-slate-500 border-b border-slate-800">
-                              <th className="text-left pb-2 font-normal">Metric</th>
-                              <th className="text-right pb-2 font-normal">p(d)</th>
-                              <th className="text-right pb-2 font-normal">ppm</th>
-                              <th className="text-right pb-2 font-normal">Defects</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-900">
-                            <tr>
-                              <td className="py-2 text-slate-400">Upper Limit</td>
-                              <td className="text-right text-red-500">{(propResults as any).ci2.upper.toExponential(4)}</td>
-                              <td className="text-right text-slate-400">{Math.round((propResults as any).ci2.upper * 1000000)}</td>
-                              <td className="text-right text-red-500">{Math.round((propResults as any).ci2.upper * (propResults as any).n2)}</td>
-                            </tr>
-                            <tr className="bg-slate-900/50">
-                              <td className="py-2 text-white font-bold tracking-wider">NOMINAL</td>
-                              <td className="text-right text-white font-bold">{(propResults as any).ci2.nominal.toExponential(4)}</td>
-                              <td className="text-right text-white font-bold">{Math.round((propResults as any).ci2.nominal * 1000000)}</td>
-                              <td className="text-right text-white font-bold">{(propResults as any).e2}</td>
-                            </tr>
-                            <tr>
-                              <td className="py-2 text-slate-400">Lower Limit</td>
-                              <td className="text-right text-green-500">{(propResults as any).ci2.lower.toExponential(4)}</td>
-                              <td className="text-right text-slate-400">{Math.round((propResults as any).ci2.lower * 1000000)}</td>
-                              <td className="text-right text-green-500">{Math.round((propResults as any).ci2.lower * (propResults as any).n2)}</td>
-                            </tr>
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Summary Comparison Output (Only for 2-sample) */}
-                  {propType === '2samp' && (
-                    <div className="bg-slate-950 p-8 rounded border-2 border-slate-800 shadow-2xl overflow-x-auto">
-                      <h4 className="text-center font-black italic text-xl text-slate-300 uppercase mb-8 tracking-[0.2em] border-b border-slate-800 pb-4">Statistical Comparison Results</h4>
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-12 items-start">
-                        
-                        <div className="space-y-4">
-                          <table className="w-full text-xs font-mono border-collapse">
+                      {propType === '2samp' && (
+                        <div className="bg-slate-950 p-4 rounded border-l-4 border-l-blue-500 border-y border-r border-slate-800">
+                          <div className="flex justify-between items-center mb-4">
+                            <span className="text-xs font-black text-blue-500 uppercase">{(propResults as any).label2} Results</span>
+                            <span className="text-[10px] text-slate-500 bg-slate-900 px-2 py-0.5 rounded">N = {(propResults as any).n2.toLocaleString()}</span>
+                          </div>
+                          <table className="w-full text-xs font-mono">
                             <thead>
-                              <tr className="border-b border-slate-800 uppercase italic">
-                                <th className="text-left py-2 text-slate-500">Sample</th>
-                                <th className="text-center py-2 text-sky-400">X</th>
-                                <th className="text-center py-2 text-sky-400">N</th>
-                                <th className="text-right py-2 text-sky-400">P-Hat</th>
+                              <tr className="text-slate-500 border-b border-slate-800">
+                                <th className="text-left pb-2 font-normal">Metric</th>
+                                <th className="text-right pb-2 font-normal">p(d)</th>
+                                <th className="text-right pb-2 font-normal">ppm</th>
+                                <th className="text-right pb-2 font-normal">Defects</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-900">
                               <tr>
-                                <td className="py-3 text-slate-400">{(propResults as any).label1}</td>
-                                <td className="text-center text-slate-200">{(propResults as any).e1}</td>
-                                <td className="text-center text-slate-200">{(propResults as any).n1.toLocaleString()}</td>
-                                <td className="text-right text-slate-200">{(propResults as any).p1.toExponential(4)}</td>
+                                <td className="py-2 text-slate-400">Upper Limit</td>
+                                <td className="text-right text-red-500">{typeof (propResults as any).ci2.upper === 'number' ? formatPropValue((propResults as any).ci2.upper) : '--'}</td>
+                                <td className="text-right text-slate-400">{Math.round((propResults as any).ci2.upper * 1000000)}</td>
+                                <td className="text-right text-red-500">{Math.round((propResults as any).ci2.upper * (propResults as any).n2)}</td>
                               </tr>
+                              <tr className="bg-slate-900/50">
+                                <td className="py-2 text-white font-bold tracking-wider">NOMINAL</td>
+                                <td className="text-right text-white font-bold">{typeof (propResults as any).ci2.nominal === 'number' ? formatPropValue((propResults as any).ci2.nominal) : '--'}</td>
+                                <td className="text-right text-white font-bold">{Math.round((propResults as any).ci2.nominal * 1000000)}</td>
+                                <td className="text-right text-white font-bold">{(propResults as any).e2}</td>
+                              </tr>
+                              <tr>
+                                <td className="py-2 text-slate-400">Lower Limit</td>
+                                <td className="text-right text-green-500">{typeof (propResults as any).ci2.lower === 'number' ? formatPropValue((propResults as any).ci2.lower) : '--'}</td>
+                                <td className="text-right text-slate-400">{Math.round((propResults as any).ci2.lower * 1000000)}</td>
+                                <td className="text-right text-green-500">{Math.round((propResults as any).ci2.lower * (propResults as any).n2)}</td>
+                              </tr>
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Summary Comparison Output */}
+                  <div className="bg-slate-950 p-8 rounded border-2 border-slate-800 shadow-2xl overflow-x-auto">
+                    <h4 className="text-center font-black italic text-xl text-slate-300 uppercase mb-8 tracking-[0.2em] border-b border-slate-800 pb-4">
+                      {propType === '1samp' ? 'Statistical Test Summary' : 'Statistical Comparison Results'}
+                    </h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-12 items-start">
+                      
+                      <div className="space-y-4">
+                        <table className="w-full text-xs font-mono border-collapse">
+                          <thead>
+                            <tr className="border-b border-slate-800 uppercase italic">
+                              <th className="text-left py-2 text-slate-500">Sample</th>
+                              <th className="text-center py-2 text-sky-400">X</th>
+                              <th className="text-center py-2 text-sky-400">N</th>
+                              <th className="text-right py-2 text-sky-400">P-Hat</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-900">
+                            <tr>
+                              <td className="py-3 text-slate-400">{(propResults as any).label1}</td>
+                              <td className="text-center text-slate-200">{(propResults as any).e1}</td>
+                              <td className="text-center text-slate-200">{(propResults as any).n1.toLocaleString()}</td>
+                              <td className="text-right text-slate-200">{typeof (propResults as any).p1 === 'number' ? formatPropValue((propResults as any).p1) : '--'}</td>
+                            </tr>
+                            {propType === '2samp' && (
                               <tr>
                                 <td className="py-3 text-slate-400">{(propResults as any).label2}</td>
                                 <td className="text-center text-slate-200">{(propResults as any).e2}</td>
                                 <td className="text-center text-slate-200">{(propResults as any).n2.toLocaleString()}</td>
-                                <td className="text-right text-slate-200">{(propResults as any).p2.toExponential(4)}</td>
+                                <td className="text-right text-slate-200">{typeof (propResults as any).p2 === 'number' ? formatPropValue((propResults as any).p2) : '--'}</td>
                               </tr>
-                            </tbody>
-                          </table>
-                          <div className="p-3 bg-slate-900 rounded border border-slate-800 text-[10px] text-center text-slate-500 italic">
-                            Difference = p(1) - p(2)
+                            )}
+                          </tbody>
+                        </table>
+                        <div className="p-3 bg-slate-900 rounded border border-slate-800 text-[10px] text-center text-slate-500 italic">
+                          {propType === '1samp' ? `Testing against Target Prop: ${pTarget}` : 'Difference = p(1) - p(2)'}
+                        </div>
+                      </div>
+
+                      <div className="space-y-6">
+                        <div className="group border-b border-slate-800 pb-4">
+                          <label className="block text-[10px] text-slate-500 uppercase font-black mb-2 tracking-widest">
+                            {propType === '1samp' ? 'Observed Rate' : 'Estimate of Difference'}
+                          </label>
+                          <div className="text-2xl font-mono text-cyan-400 font-black tabular-nums">
+                            {propType === '1samp' 
+                              ? (typeof (propResults as any).p1 === 'number' ? formatPropValue((propResults as any).p1, 6) : '--')
+                              : (typeof (propResults as any).diff === 'number' ? formatPropValue((propResults as any).diff, 8) : '--')}
                           </div>
                         </div>
 
-                        <div className="space-y-6">
-                          <div className="group border-b border-slate-800 pb-4">
-                            <label className="block text-[10px] text-slate-500 uppercase font-black mb-2 tracking-widest">Estimate of Difference</label>
-                            <div className="text-2xl font-mono text-red-400 font-black tabular-nums">
-                              {(propResults as any).diff.toExponential(8)}
-                            </div>
+                        <div className="group border-b border-slate-800 pb-4">
+                          <label className="block text-[10px] text-slate-500 uppercase font-black mb-2 tracking-widest">
+                            {(1-alpha)*100}% Bound for {propType === '1samp' ? 'Proportion' : 'Difference'}
+                          </label>
+                          <div className="text-xl font-mono text-red-500 font-black tabular-nums">
+                            {propType === '1samp'
+                              ? `${formatPropValue((propResults as any).ci1.lower)} ↔ ${formatPropValue((propResults as any).ci1.upper)}`
+                              : (typeof (propResults as any).diffLower === 'number' 
+                                  ? formatPropValue((propResults as any).diffLower, 8) 
+                                  : typeof (propResults as any).diffUpper === 'number' 
+                                    ? formatPropValue((propResults as any).diffUpper, 8)
+                                    : '--')}
                           </div>
-
-                          <div className="group border-b border-slate-800 pb-4">
-                            <label className="block text-[10px] text-slate-500 uppercase font-black mb-2 tracking-widest">
-                              {(1-alpha)*100}% Bound for Difference
-                            </label>
-                            <div className="text-xl font-mono text-red-500 font-black tabular-nums">
-                              {(propResults as any).diffLower !== null 
-                                ? (propResults as any).diffLower.toExponential(8) 
-                                : (propResults as any).diffUpper?.toExponential(8)}
-                            </div>
-                            <div className="text-[10px] text-slate-600 mt-1 italic uppercase">
-                              Analysis based on {propAlt} alternative
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="space-y-6">
-                          <div className="grid grid-cols-2 gap-8">
-                            <div className="bg-slate-900 p-4 border border-slate-800 rounded">
-                              <label className="block text-[10px] text-slate-500 uppercase font-black mb-2 tracking-widest">Z-Stat</label>
-                              <div className="text-2xl font-mono text-white">{(propResults as any).statistic.toFixed(2)}</div>
-                            </div>
-                            <div className={`p-4 border rounded ${propResults.pValue < alpha ? 'bg-red-500/10 border-red-500/50' : 'bg-green-500/10 border-green-500/50'}`}>
-                              <label className="block text-[10px] text-slate-500 uppercase font-black mb-2 tracking-widest">P-Value</label>
-                              <div className={`text-2xl font-mono font-black ${propResults.pValue < alpha ? 'text-red-500' : 'text-green-500'}`}>
-                                {propResults.pValue.toFixed(4)}
-                              </div>
-                            </div>
+                          <div className="text-[10px] text-slate-600 mt-1 italic uppercase font-bold">
+                            Alternative (H₁): {propAlt === 'neq' ? '≠' : propAlt === 'greater' ? '>' : '<'}
                           </div>
                         </div>
                       </div>
+
+                      <div className="space-y-6">
+                        <div className="grid grid-cols-2 gap-8">
+                          <div className="bg-slate-900 p-4 border border-slate-800 rounded">
+                            <label className="block text-[10px] text-slate-500 uppercase font-black mb-2 tracking-widest">Z-Stat</label>
+                            <div className="text-2xl font-mono text-white">{(propResults as any).statistic.toFixed(2)}</div>
+                          </div>
+                          <div className={`p-4 border rounded ${propResults.pValue < alpha ? 'bg-red-500/10 border-red-500/50' : 'bg-green-500/10 border-green-500/50'}`}>
+                            <label className="block text-[10px] text-slate-500 uppercase font-black mb-2 tracking-widest">P-Value</label>
+                            <div className={`text-2xl font-mono font-black ${propResults.pValue < alpha ? 'text-red-500' : 'text-green-500'}`}>
+                              {propResults.pValue.toFixed(4)}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="p-4 bg-slate-900/50 rounded border border-slate-800">
+                          <h5 className="text-[10px] font-bold text-slate-500 uppercase mb-2">Conclusion</h5>
+                          <p className="text-[10px] text-slate-400 leading-relaxed italic">
+                            {propResults.pValue < alpha 
+                              ? `Reject H₀: There is sufficient evidence at the ${(1-alpha)*100}% confidence level to suggest a significant difference.`
+                              : `Fail to reject H₀: There is not enough evidence to suggest a significant difference.`}
+                          </p>
+                        </div>
+                      </div>
                     </div>
-                  )}
+                  </div>
                 </div>
               )}
             </div>
@@ -1766,7 +2015,9 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
 
           {activeTab === 'poisson' && (
             <div className="bg-slate-800 p-6 rounded-lg border border-slate-700 shadow-xl space-y-8">
-              <h3 className="text-xl font-bold">Poisson Rate Test Results</h3>
+              <h3 className="text-xl font-bold">
+                {poiType === '1samp' ? '1-Sample Poisson Rate Test' : '2-Sample Poisson Rate Test'}
+              </h3>
               {!poiResults ? (
                 <div className="h-64 flex items-center justify-center border border-dashed border-slate-700 rounded text-slate-500 italic">
                   Complete input fields. Size must be {'>'} 0.
@@ -1774,10 +2025,16 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
               ) : (
                 <div className="space-y-8">
                    <ExportWrapper fileName="poisson-summary">
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-center">
+                    <div className="grid grid-cols-1 md:grid-cols-5 gap-4 text-center">
                       <div className="bg-slate-900 p-4 rounded border border-slate-700">
                         <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">Test Statistic</div>
                         <div className="text-2xl font-mono text-purple-500 font-bold">{poiResults.statistic.toFixed(4)}</div>
+                      </div>
+                      <div className="bg-slate-900 p-4 rounded border border-slate-700">
+                        <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">Alternative (H₁)</div>
+                        <div className="text-xs mt-2 font-bold text-sky-400">
+                          {poiAlt === 'neq' ? '≠' : poiAlt === 'greater' ? '>' : '<'}
+                        </div>
                       </div>
                       <div className="bg-slate-900 p-4 rounded border border-slate-700">
                         <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">P-Value</div>
@@ -1802,23 +2059,46 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                     <div className="bg-slate-900 p-4 rounded border border-slate-700 h-[300px]">
-                       <h4 className="text-xs font-bold text-slate-500 uppercase mb-4 text-center tracking-widest">Rate Comparison</h4>
+                       <h4 className="text-xs font-bold text-slate-500 uppercase mb-4 text-center tracking-widest">Plot of Poisson Rate Intervals</h4>
                        <ResponsiveContainer width="100%" height="85%">
-                         <BarChart data={
-                           poiType === '1samp' 
-                             ? [{ name: (poiResults as any).label1, Rate: (poiResults as any).rate, Null: (poiResults as any).targetRate }]
-                             : [
-                                 { name: (poiResults as any).label1, Rate: (poiResults as any).r1 },
-                                 { name: (poiResults as any).label2, Rate: (poiResults as any).r2 }
-                               ]
-                         }>
-                           <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                           <XAxis dataKey="name" stroke="#94a3b8" fontSize={10} />
-                           <YAxis stroke="#94a3b8" fontSize={10} />
-                           <Tooltip contentStyle={{ backgroundColor: '#0f172a' }} />
-                           <Bar dataKey="Rate" fill="#a78bfa" radius={[4, 4, 0, 0]} />
-                           {poiType === '1samp' && <Bar dataKey="Null" fill="#64748b" radius={[4, 4, 0, 0]} />}
-                         </BarChart>
+                         <ComposedChart
+                           layout="vertical"
+                           data={
+                             poiType === '1samp' 
+                               ? [
+                                   { name: (poiResults as any).label1, range: [(poiResults as any).ci1.lower, (poiResults as any).ci1.upper], nominal: (poiResults as any).ci1.nominal }
+                                 ]
+                               : [
+                                   { name: (poiResults as any).label1, range: [(poiResults as any).ci1.lower, (poiResults as any).ci1.upper], nominal: (poiResults as any).ci1.nominal },
+                                   { name: (poiResults as any).label2, range: [(poiResults as any).ci2.lower, (poiResults as any).ci2.upper], nominal: (poiResults as any).ci2.nominal }
+                                 ]
+                           }
+                           margin={{ top: 20, right: 30, left: 20, bottom: 20 }}
+                         >
+                           <CartesianGrid stroke="#1e293b" />
+                           <XAxis 
+                             type="number" 
+                             domain={[0, 'auto']} 
+                             stroke="#64748b" 
+                             fontSize={10} 
+                           />
+                           <YAxis 
+                             type="category" 
+                             dataKey="name" 
+                             stroke="#64748b" 
+                             fontSize={10} 
+                             width={80}
+                           />
+                           <Tooltip 
+                             contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155' }}
+                             formatter={(v: any) => Array.isArray(v) ? `${v[0].toFixed(4)} - ${v[1].toFixed(4)}` : (typeof v === 'number' ? v.toFixed(4) : v)}
+                           />
+                           <Bar dataKey="range" fill="#a78bfa44" radius={[0, 4, 4, 0]} barSize={8} />
+                           {poiType === '1samp' && (
+                             <ReferenceLine x={Number(poiTargetRate)} stroke="#ef4444" strokeDasharray="3 3" label={{ position: 'top', value: `Target: ${poiTargetRate}`, fill: '#ef4444', fontSize: 10 }} />
+                           )}
+                           <Scatter dataKey="nominal" fill="#a78bfa" shape="square" />
+                         </ComposedChart>
                        </ResponsiveContainer>
                     </div>
 

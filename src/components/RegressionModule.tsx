@@ -26,6 +26,7 @@ export default function RegressionModule({ datasets }: { datasets: any[] }) {
   const [responseId, setResponseId] = useState('');
   const [predictorIds, setPredictorIds] = useState<string[]>([]);
   const [plotPredictors, setPlotPredictors] = useState<string[]>([]);
+  const [modelType, setModelType] = useState<'linear' | 'quadratic' | 'cubic' | 'exponential'>('linear');
 
   // --- Calculations ---
   const results = useMemo(() => {
@@ -37,23 +38,59 @@ export default function RegressionModule({ datasets }: { datasets: any[] }) {
     const xDatasets = predictorIds.map(id => datasets.find(d => d.id === id)).filter(d => !!d);
     if (xDatasets.length === 0) return null;
 
-    const yData = responseDataset.values.map((v: any) => Number(v)).filter((v: number) => !isNaN(v));
+    const yDataRaw = responseDataset.values.map((v: any) => Number(v)).filter((v: number) => !isNaN(v));
     const xNames = xDatasets.map(d => d.name);
     const xDataMatrix = xDatasets.map(d => d.values.map((v: any) => Number(v)));
 
     // Ensure all have same length
-    const n = yData.length;
+    const n = yDataRaw.length;
     if (xDataMatrix.some(arr => arr.length !== n)) {
         console.warn('Dataset lengths mismatch');
         return null;
     }
 
-    return runMultipleRegression(yData, xDataMatrix, xNames);
-  }, [responseId, predictorIds, datasets]);
+    let effectiveY = [...yDataRaw];
+    let effectiveXNames = [...xNames];
+    let effectiveXMatrix = [...xDataMatrix];
+
+    if (modelType === 'exponential') {
+      if (yDataRaw.some(v => v <= 0)) {
+          return { error: 'Exponential model requires all Y values to be positive.' };
+      }
+      effectiveY = yDataRaw.map(v => Math.log(v));
+    } else if (modelType === 'quadratic') {
+      effectiveXNames = [];
+      effectiveXMatrix = [];
+      xNames.forEach((name, i) => {
+        effectiveXNames.push(name);
+        effectiveXMatrix.push(xDataMatrix[i]);
+        effectiveXNames.push(`${name}²`);
+        effectiveXMatrix.push(xDataMatrix[i].map(v => v * v));
+      });
+    } else if (modelType === 'cubic') {
+      effectiveXNames = [];
+      effectiveXMatrix = [];
+      xNames.forEach((name, i) => {
+        effectiveXNames.push(name);
+        effectiveXMatrix.push(xDataMatrix[i]);
+        effectiveXNames.push(`${name}²`);
+        effectiveXMatrix.push(xDataMatrix[i].map(v => v * v));
+        effectiveXNames.push(`${name}³`);
+        effectiveXMatrix.push(xDataMatrix[i].map(v => v * v * v));
+      });
+    }
+
+    const reg = runMultipleRegression(effectiveY, effectiveXMatrix, effectiveXNames);
+    if (!reg) return null;
+
+    return { ...reg, modelType };
+  }, [responseId, predictorIds, datasets, modelType]);
+
+  const safeResults = results && !('error' in (results as any)) ? (results as any) : null;
 
   // Sampled Diagnostics for Huge Datasets
-  const sampledProbPlot = useMemo(() => sampleData(results?.probPlot || [], 1000), [results?.probPlot]);
-  const sampledResiduals = useMemo(() => sampleData(results?.residuals || [], 1000), [results?.residuals]);
+  const sampledProbPlot = useMemo(() => sampleData(safeResults?.probPlot || [], 1000), [safeResults?.probPlot]);
+  const sampledResiduals = useMemo(() => sampleData(safeResults?.residuals || [], 1000), [safeResults?.residuals]);
 
   // Sync plotPredictors when predictorIds change
   useMemo(() => {
@@ -73,20 +110,32 @@ export default function RegressionModule({ datasets }: { datasets: any[] }) {
   // Derived results
   const equation = useMemo(() => {
     if (!results) return 'Select Response and Predictors to see Equation';
-    const constTerm = results.coeffs[0].coeff;
+    if ('error' in (results as any)) return (results as any).error;
+
+    if (modelType === 'exponential') {
+      const a = Math.exp(safeResults.coeffs[0].coeff);
+      let eq = `Y = ${a.toFixed(4)}`;
+      for (let i = 1; i < safeResults.coeffs.length; i++) {
+        const c = safeResults.coeffs[i];
+        eq += ` * e^(${c.coeff.toFixed(4)} * ${c.term})`;
+      }
+      return eq;
+    }
+
+    const constTerm = safeResults.coeffs[0].coeff;
     let eq = `Y = ${constTerm.toFixed(4)}`;
-    for (let i = 1; i < results.coeffs.length; i++) {
-        const c = results.coeffs[i];
+    for (let i = 1; i < safeResults.coeffs.length; i++) {
+        const c = safeResults.coeffs[i];
         eq += ` ${c.coeff >= 0 ? '+' : '-'} ${Math.abs(c.coeff).toFixed(4)}(${c.term})`;
     }
     return eq;
-  }, [results]);
+  }, [results, safeResults, modelType]);
 
   // Histogram Data
   const residualHistogram = useMemo(() => {
-    if (!results) return [];
-    return generateDynamicHistogram(results.residuals.map(r => r.value));
-  }, [results]);
+    if (!safeResults) return [];
+    return generateDynamicHistogram(safeResults.residuals.map((r: any) => r.value));
+  }, [safeResults]);
 
   const togglePredictor = (id: string) => {
     if (id === responseId) return;
@@ -132,6 +181,18 @@ export default function RegressionModule({ datasets }: { datasets: any[] }) {
               {datasets.filter(d => d.isNumeric).map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
             </select>
 
+            <label className="block text-xs text-slate-400 mb-1">Model Type</label>
+            <select 
+              className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm mb-4 focus:ring-1 focus:ring-sky-500 outline-none" 
+              value={modelType} 
+              onChange={e => setModelType(e.target.value as any)}
+            >
+              <option value="linear">Linear</option>
+              <option value="quadratic">Quadratic</option>
+              <option value="cubic">Cubic</option>
+              <option value="exponential">Exponential</option>
+            </select>
+
             <label className="block text-xs text-slate-400 mb-1">Predictor Variables (X)</label>
             <div className="space-y-2 max-h-[400px] overflow-y-auto custom-scrollbar p-1">
               {datasets.filter(d => d.id !== responseId).map(d => (
@@ -163,32 +224,32 @@ export default function RegressionModule({ datasets }: { datasets: any[] }) {
                     <Layout size={20} className="text-sky-400" /> Model Statistics
                 </h3>
                 <div className="mt-4 bg-slate-900 p-6 rounded border border-slate-700 text-center font-mono text-lg text-sky-400 shadow-inner">
-                  {equation}
+                  {results?.error ? <span className="text-red-400">{results.error}</span> : equation}
                 </div>
                 
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
                   <div className="bg-slate-900/50 p-4 rounded border border-slate-700/50 text-center">
                     <div className="text-xs text-slate-500 uppercase tracking-widest font-bold">R-Sq (Adj)</div>
-                    <div className="text-xl font-mono text-white mt-1">{results ? (results.rSqAdj * 100).toFixed(2) : '--'}%</div>
+                    <div className="text-xl font-mono text-white mt-1">{safeResults ? (safeResults.rSqAdj * 100).toFixed(2) : '--'}%</div>
                   </div>
                   <div className="bg-slate-900/50 p-4 rounded border border-slate-700/50 text-center">
                     <div className="text-xs text-slate-500 uppercase tracking-widest font-bold">R-Sq</div>
-                    <div className="text-xl font-mono text-white mt-1">{results ? (results.rSq * 100).toFixed(2) : '--'}%</div>
+                    <div className="text-xl font-mono text-white mt-1">{safeResults ? (safeResults.rSq * 100).toFixed(2) : '--'}%</div>
                   </div>
                   <div className="bg-slate-900/50 p-4 rounded border border-slate-700/50 text-center">
                     <div className="text-xs text-slate-500 uppercase tracking-widest font-bold">S (Error)</div>
-                    <div className="text-xl font-mono text-white mt-1">{results ? results.s.toFixed(4) : '--'}</div>
+                    <div className="text-xl font-mono text-white mt-1">{safeResults ? safeResults.s.toFixed(4) : '--'}</div>
                   </div>
                   <div className="bg-slate-900/50 p-4 rounded border border-slate-700/50 text-center">
                     <div className="text-xs text-slate-500 uppercase tracking-widest font-bold">Model P-Val</div>
-                    <div className={`text-xl font-mono mt-1 ${results && results.anova.model.p < 0.05 ? 'text-emerald-400' : 'text-slate-400'}`}>
-                      {results ? (results.anova.model.p < 0.001 ? '< 0.001' : results.anova.model.p.toFixed(4)) : '--'}
+                    <div className={`text-xl font-mono mt-1 ${safeResults && safeResults.anova.model.p < 0.05 ? 'text-emerald-400' : 'text-slate-400'}`}>
+                      {safeResults ? (safeResults.anova.model.p < 0.001 ? '< 0.001' : safeResults.anova.model.p.toFixed(4)) : '--'}
                     </div>
                   </div>
                 </div>
               </div>
 
-              {results && (
+              {results && !results.error && (
                 <div className="p-6 space-y-8 bg-slate-800">
                   {/* Parameter Estimates */}
                   <div className="space-y-4">
@@ -207,7 +268,7 @@ export default function RegressionModule({ datasets }: { datasets: any[] }) {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-700">
-                          {results.coeffs.map((c, i) => (
+                          {safeResults.coeffs.map((c: any, i: number) => (
                             <tr key={`coeff-${i}`} className="hover:bg-slate-700/30">
                               <td className="p-2 font-bold text-sky-400">{c.term}</td>
                               <td className="p-2 text-right">{c.coeff.toFixed(6)}</td>
@@ -243,24 +304,24 @@ export default function RegressionModule({ datasets }: { datasets: any[] }) {
                         <tbody className="divide-y divide-slate-700">
                           <tr className="hover:bg-slate-700/30">
                             <td className="p-2 font-bold text-sky-400">Model</td>
-                            <td className="p-2 text-right">{results.anova.model.df}</td>
-                            <td className="p-2 text-right">{results.anova.model.ss.toFixed(4)}</td>
-                            <td className="p-2 text-right">{results.anova.model.ms.toFixed(4)}</td>
-                            <td className="p-2 text-right">{results.anova.model.f.toFixed(2)}</td>
-                            <td className="p-2 text-right">{results.anova.model.p < 0.001 ? '< 0.001' : results.anova.model.p.toFixed(4)}</td>
+                            <td className="p-2 text-right">{safeResults.anova.model.df}</td>
+                            <td className="p-2 text-right">{safeResults.anova.model.ss.toFixed(4)}</td>
+                            <td className="p-2 text-right">{safeResults.anova.model.ms.toFixed(4)}</td>
+                            <td className="p-2 text-right">{safeResults.anova.model.f.toFixed(2)}</td>
+                            <td className="p-2 text-right">{safeResults.anova.model.p < 0.001 ? '< 0.001' : safeResults.anova.model.p.toFixed(4)}</td>
                           </tr>
                           <tr className="hover:bg-slate-700/30">
                             <td className="p-2 font-bold text-slate-500">Error</td>
-                            <td className="p-2 text-right">{results.anova.error.df}</td>
-                            <td className="p-2 text-right">{results.anova.error.ss.toFixed(4)}</td>
-                            <td className="p-2 text-right">{results.anova.error.ms.toFixed(4)}</td>
+                            <td className="p-2 text-right">{safeResults.anova.error.df}</td>
+                            <td className="p-2 text-right">{safeResults.anova.error.ss.toFixed(4)}</td>
+                            <td className="p-2 text-right">{safeResults.anova.error.ms.toFixed(4)}</td>
                             <td className="p-2 text-right"></td>
                             <td className="p-2 text-right"></td>
                           </tr>
                           <tr className="bg-slate-900/30">
                             <td className="p-2 font-bold">Total</td>
-                            <td className="p-2 text-right">{results.anova.total.df}</td>
-                            <td className="p-2 text-right">{results.anova.total.ss.toFixed(4)}</td>
+                            <td className="p-2 text-right">{safeResults.anova.total.df}</td>
+                            <td className="p-2 text-right">{safeResults.anova.total.ss.toFixed(4)}</td>
                             <td className="p-2 text-right"></td>
                             <td className="p-2 text-right"></td>
                             <td className="p-2 text-right"></td>
@@ -279,7 +340,7 @@ export default function RegressionModule({ datasets }: { datasets: any[] }) {
                             </div>
                             <div>
                                 <div className="text-[10px] text-slate-500 uppercase font-bold">Durbin-Watson Statistic</div>
-                                <div className="text-lg font-mono text-amber-400 font-bold">{results.dw.toFixed(3)}</div>
+                                <div className="text-lg font-mono text-amber-400 font-bold">{safeResults.dw.toFixed(3)}</div>
                             </div>
                         </div>
                         <p className="text-[10px] text-slate-500 text-right max-w-[200px] italic">
@@ -324,7 +385,7 @@ export default function RegressionModule({ datasets }: { datasets: any[] }) {
                 </div>
 
                 <div className="h-[500px] relative">
-                  {results && (
+                  {results && !results.error && (
                     <div className="absolute top-4 right-4 bg-slate-900/90 p-3 rounded border border-slate-700 text-[11px] font-mono z-10 shadow-xl max-w-[250px] pointer-events-none">
                       <div className="text-sky-400 font-bold mb-2 break-words border-b border-slate-700 pb-2">
                         {equation}
@@ -333,18 +394,22 @@ export default function RegressionModule({ datasets }: { datasets: any[] }) {
                         {predictorIds.length >= 3 ? (
                           <>
                             <span className="text-slate-500 uppercase text-[9px] font-bold">Adj R-Sq</span>
-                            <span className="text-emerald-400 font-bold">{(results.rSqAdj * 100).toFixed(2)}%</span>
+                            <span className="text-emerald-400 font-bold">{(safeResults.rSqAdj * 100).toFixed(2)}%</span>
                           </>
                         ) : (
                           <>
                             <span className="text-slate-500 uppercase text-[9px] font-bold">R-Sq</span>
-                            <span className="text-emerald-400 font-bold">{(results.rSq * 100).toFixed(2)}%</span>
+                            <span className="text-emerald-400 font-bold">{(safeResults.rSq * 100).toFixed(2)}%</span>
                           </>
                         )}
                       </div>
                     </div>
                   )}
-                  {plotPredictors.length > 2 ? (
+                  {results?.error ? (
+                    <div className="flex items-center justify-center h-full text-red-400 text-sm italic">
+                      {results.error}
+                    </div>
+                  ) : plotPredictors.length > 2 ? (
                     <div className="flex flex-col items-center justify-center h-full text-slate-500 border border-dashed border-slate-700 rounded-lg bg-slate-900/20 px-8 text-center">
                       <TrendingUp size={48} className="mb-4 opacity-20" />
                       <p className="text-sm">Direct visualization is limited to 1 or 2 predictors at a time.</p>
@@ -385,26 +450,61 @@ export default function RegressionModule({ datasets }: { datasets: any[] }) {
                   ) : plotPredictors.length === 1 ? (
                     (() => {
                         const currentX = datasets.find(d => d.id === plotPredictors[0]);
-                        if (!currentX || !results) return null;
-                        const xIdx = predictorIds.indexOf(currentX.id);
+                        if (!currentX || !safeResults || results.error) return null;
                         
-                        // Calculate offset: constant + sum(beta_j * mean(X_j)) for j != currentX
-                        let offset = results.coeffs[0].coeff;
-                        predictorIds.forEach((id, idx) => {
+                        // For visualization with multiple predictors, we hold other predictors at their mean.
+                        // We find all terms in 'results.coeffs' that correspond to 'plotPredictors[0]' (including its powers)
+                        // and all other terms.
+                        
+                        const coeffsMap = new Map();
+                        safeResults.coeffs.forEach((c: any) => coeffsMap.set(c.term, c.coeff));
+
+                        const xNums = currentX.values.map(Number);
+                        const minX = xNums.reduce((a, b) => Math.min(a, b), xNums[0]);
+                        const maxX = xNums.reduce((a, b) => Math.max(a, b), xNums[0]);
+
+                        const range = maxX - minX;
+                        const plotPoints = [];
+                        const steps = 100;
+                        
+                        // Calculate base offset from other variables held at mean
+                        let baseOffset = coeffsMap.get('Constant') || 0;
+                        predictorIds.forEach(id => {
                           if (id !== currentX.id) {
                             const ds = datasets.find(d => d.id === id);
                             if (ds) {
                               const values = ds.values.map(Number);
                               const mean = values.reduce((a, b) => a + b, 0) / values.length;
-                              offset += results.coeffs[idx + 1].coeff * mean;
+                              baseOffset += (coeffsMap.get(ds.name) || 0) * mean;
+                              if (modelType === 'quadratic') baseOffset += (coeffsMap.get(`${ds.name}²`) || 0) * mean * mean;
+                              if (modelType === 'cubic') {
+                                baseOffset += (coeffsMap.get(`${ds.name}²`) || 0) * mean * mean;
+                                baseOffset += (coeffsMap.get(`${ds.name}³`) || 0) * mean * mean * mean;
+                              }
                             }
                           }
                         });
 
-                        const xNums = currentX.values.map(Number);
-                        const minX = xNums.reduce((a, b) => Math.min(a, b), xNums[0]);
-                        const maxX = xNums.reduce((a, b) => Math.max(a, b), xNums[0]);
-                        const coeff = results.coeffs[xIdx + 1].coeff;
+                        for (let i = 0; i <= steps; i++) {
+                          const x = minX + (range * i) / steps;
+                          let y;
+                          
+                          if (modelType === 'exponential') {
+                            const a = Math.exp(baseOffset);
+                            const b = coeffsMap.get(currentX.name) || 0;
+                            y = a * Math.exp(b * x);
+                          } else {
+                            y = baseOffset;
+                            y += (coeffsMap.get(currentX.name) || 0) * x;
+                            if (modelType === 'quadratic' || modelType === 'cubic') {
+                                y += (coeffsMap.get(`${currentX.name}²`) || 0) * x * x;
+                            }
+                            if (modelType === 'cubic') {
+                                y += (coeffsMap.get(`${currentX.name}³`) || 0) * x * x * x;
+                            }
+                          }
+                          plotPoints.push({ xValue: x, yTrend: y });
+                        }
 
                         return (
                             <ResponsiveContainer width="100%" height="100%">
@@ -424,13 +524,10 @@ export default function RegressionModule({ datasets }: { datasets: any[] }) {
                                 />
                                 <Scatter name="Observed Data" dataKey="yValue" fill="#38bdf8" />
                                 <Line 
-                                  name="Regression Line"
-                                  data={[
-                                    { xValue: minX, yValue: offset + coeff * minX },
-                                    { xValue: maxX, yValue: offset + coeff * maxX }
-                                  ]} 
+                                  name="Fitted Model"
+                                  data={plotPoints}
                                   type="monotone" 
-                                  dataKey="yValue" 
+                                  dataKey="yTrend" 
                                   stroke="#ef4444" 
                                   dot={false} 
                                   strokeWidth={2}
@@ -451,7 +548,7 @@ export default function RegressionModule({ datasets }: { datasets: any[] }) {
           )}
 
           {/* Residual Diagnostics */}
-          {results && (
+          {results && !results.error && (
             <div className="bg-slate-800 p-6 rounded-lg border border-slate-700 shadow-xl">
               <h3 className="text-lg font-bold mb-6 flex items-center gap-2">
                 <BarChart2 size={18} className="text-slate-400" /> 4-in-1 Residual Diagnostics
@@ -472,12 +569,12 @@ export default function RegressionModule({ datasets }: { datasets: any[] }) {
                         <ReferenceLine 
                           segment={[
                             { 
-                              x: results.probPlot.reduce((a, b) => Math.min(a, b.theoretical), results.probPlot[0].theoretical), 
-                              y: results.probPlot.reduce((a, b) => Math.min(a, b.theoretical), results.probPlot[0].theoretical) * results.s 
+                              x: safeResults.probPlot.reduce((a: number, b: any) => Math.min(a, b.theoretical), (safeResults.probPlot[0] as any).theoretical), 
+                              y: safeResults.probPlot.reduce((a: number, b: any) => Math.min(a, b.theoretical), (safeResults.probPlot[0] as any).theoretical) * safeResults.s 
                             },
                             { 
-                              x: results.probPlot.reduce((a, b) => Math.max(a, b.theoretical), results.probPlot[0].theoretical), 
-                              y: results.probPlot.reduce((a, b) => Math.max(a, b.theoretical), results.probPlot[0].theoretical) * results.s 
+                              x: safeResults.probPlot.reduce((a: number, b: any) => Math.max(a, b.theoretical), (safeResults.probPlot[0] as any).theoretical), 
+                              y: safeResults.probPlot.reduce((a: number, b: any) => Math.max(a, b.theoretical), (safeResults.probPlot[0] as any).theoretical) * safeResults.s 
                             }
                           ]}
                           stroke="#ef4444"
@@ -495,8 +592,8 @@ export default function RegressionModule({ datasets }: { datasets: any[] }) {
                     <ResponsiveContainer width="100%" height="85%">
                       <ScatterChart margin={{ top: 10, right: 30, bottom: 20, left: 10 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                        <XAxis dataKey="fit" type="number" name="Fitted Value" stroke="#475569" domain={['auto', 'auto']} label={{ value: 'Fitted Value', position: 'insideBottom', offset: -5, fontSize: 10, fill: '#475569' }} />
-                        <YAxis dataKey="res" type="number" name="Residual" stroke="#475569" domain={['auto', 'auto']} label={{ value: 'Residual', angle: -90, position: 'insideLeft', fontSize: 10, fill: '#475569' }} />
+                        <XAxis dataKey="fitted" type="number" name="Fitted Value" stroke="#475569" domain={['auto', 'auto']} label={{ value: 'Fitted Value', position: 'insideBottom', offset: -5, fontSize: 10, fill: '#475569' }} />
+                        <YAxis dataKey="value" type="number" name="Residual" stroke="#475569" domain={['auto', 'auto']} label={{ value: 'Residual', angle: -90, position: 'insideLeft', fontSize: 10, fill: '#475569' }} />
                         <RechartsTooltip cursor={{ strokeDasharray: '3 3' }} contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', fontSize: '10px' }} />
                         <ReferenceLine y={0} stroke="#ef4444" strokeDasharray="5 5" />
                         <Scatter data={sampledResiduals} fill="#fb7185" />
@@ -530,7 +627,7 @@ export default function RegressionModule({ datasets }: { datasets: any[] }) {
                     <div className="text-[10px] text-center text-slate-500 mb-4 uppercase font-bold tracking-widest">Versus Order</div>
                     <ResponsiveContainer width="100%" height="85%">
                       <ComposedChart 
-                        data={sampleData(results.residuals.map(r => ({ obsOrder: r.order, resid: r.value })), 1000)} 
+                        data={sampleData(safeResults.residuals.map((r: any) => ({ obsOrder: r.order, resid: r.value })), 1000)} 
                         margin={{ top: 10, right: 30, bottom: 20, left: 10 }}
                       >
                         <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
