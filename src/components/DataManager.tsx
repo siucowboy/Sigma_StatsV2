@@ -10,44 +10,64 @@ interface Props {
 
 export default function DataManager({ datasets, setDatasets }: Props) {
   const [isDragging, setIsDragging] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
 
   // Parse multi-column data (CSV/Excel arrays)
-  const processData = (rawData: any[][]) => {
-    if (!rawData || rawData.length === 0) return;
+  const processData = useCallback((rawData: any[][]) => {
+    if (!rawData || rawData.length === 0) {
+      setIsProcessing(false);
+      return;
+    }
 
     const headers = rawData[0];
     const newDatasets: Dataset[] = [];
 
-    headers.forEach((header: any, colIndex: number) => {
+    // Faster iteration
+    for (let colIndex = 0; colIndex < headers.length; colIndex++) {
+      const header = headers[colIndex];
       const colName = header ? String(header).trim() : `Column ${colIndex + 1}`;
       const values: (number | string)[] = [];
       let isNumeric = true;
 
       for (let i = 1; i < rawData.length; i++) {
         const val = rawData[i][colIndex];
-        if (val !== undefined && val !== null && val !== '') {
-          const numVal = Number(val);
-          if (isNaN(numVal)) {
-            isNumeric = false;
-            values.push(String(val).trim());
-          } else {
-            values.push(numVal);
-          }
+        
+        // Skip empty values efficiently
+        if (val === undefined || val === null || val === '') continue;
+
+        const numVal = Number(val);
+        if (isNaN(numVal)) {
+          isNumeric = false;
+          values.push(String(val).trim());
+        } else {
+          values.push(numVal);
         }
       }
 
       if (values.length > 0) {
+        // Fallback for randomUUID which might not be available in all environments
+        const id = (typeof crypto !== 'undefined' && crypto.randomUUID) 
+          ? crypto.randomUUID() 
+          : `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+
         newDatasets.push({
-          id: crypto.randomUUID(),
+          id,
           name: colName,
           values,
           isNumeric
         });
       }
-    });
+    }
+
+    // Limit to prevent crashing the UI with too many columns
+    if (newDatasets.length > 500) {
+      console.warn("Large dataset detected, truncating to first 500 columns for performance.");
+      newDatasets.length = 500;
+    }
 
     setDatasets(prev => [...prev, ...newDatasets]);
-  };
+    setIsProcessing(false);
+  }, [setDatasets]);
 
   // Handle File Upload (Drag/Drop or Browse)
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement> | React.DragEvent) => {
@@ -63,15 +83,22 @@ export default function DataManager({ datasets, setDatasets }: Props) {
     
     if (!file) return;
 
+    setIsProcessing(true);
     const reader = new FileReader();
     reader.onload = (evt) => {
-      const bstr = evt.target?.result;
-      const wb = XLSX.read(bstr, { type: 'binary' });
-      const wsname = wb.SheetNames[0];
-      const ws = wb.Sheets[wsname];
-      const data = XLSX.utils.sheet_to_json(ws, { header: 1 });
-      processData(data as any[][]);
+      try {
+        const bstr = evt.target?.result;
+        const wb = XLSX.read(bstr, { type: 'binary' });
+        const wsname = wb.SheetNames[0];
+        const ws = wb.Sheets[wsname];
+        const data = XLSX.utils.sheet_to_json(ws, { header: 1 });
+        processData(data as any[][]);
+      } catch (err) {
+        console.error("File processing error:", err);
+        setIsProcessing(false);
+      }
     };
+    reader.onerror = () => setIsProcessing(false);
     reader.readAsBinaryString(file);
   };
 
@@ -82,18 +109,30 @@ export default function DataManager({ datasets, setDatasets }: Props) {
   // --- Paste Handler ---
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
     const pasteData = e.clipboardData.getData('text');
-    if (!pasteData) return;
+    if (!pasteData || isProcessing) return;
 
-    // Split by lines and then by tabs (standard Excel/Sheets format) or commas
-    const rows = pasteData.trim().split(/\r?\n/).map(row => {
-      if (row.includes('\t')) return row.split('\t');
-      return row.split(',');
-    });
+    setIsProcessing(true);
 
-    if (rows.length > 0) {
-      processData(rows as any[][]);
-    }
-  }, [setDatasets]);
+    // Defer processing to keep UI responsive
+    setTimeout(() => {
+      try {
+        const lines = pasteData.trim().split(/\r?\n/);
+        const rows = lines.map(line => {
+          if (line.includes('\t')) return line.split('\t');
+          return line.split(',');
+        });
+
+        if (rows.length > 0) {
+          processData(rows as any[][]);
+        } else {
+          setIsProcessing(false);
+        }
+      } catch (err) {
+        console.error("Paste processing error:", err);
+        setIsProcessing(false);
+      }
+    }, 50);
+  }, [processData, isProcessing]);
 
   const [showConfirmPurge, setShowConfirmPurge] = useState(false);
 
@@ -155,6 +194,13 @@ export default function DataManager({ datasets, setDatasets }: Props) {
             onDrop={handleFileUpload}
             onPaste={handlePaste}
           >
+            {isProcessing && (
+              <div className="absolute inset-0 bg-slate-900/80 backdrop-blur-sm z-50 flex flex-col items-center justify-center rounded-xl animate-in fade-in duration-300">
+                <div className="w-12 h-12 border-4 border-sky-500/20 border-t-sky-500 rounded-full animate-spin mb-4"></div>
+                <h4 className="text-xl font-bold text-white mb-1">Processing Data</h4>
+                <p className="text-slate-400 text-sm">Please wait while we parse your dataset...</p>
+              </div>
+            )}
             <UploadCloud className="w-16 h-16 mx-auto text-slate-500 mb-4" />
             <h3 className="text-xl font-semibold text-slate-200 mb-2">Import Your Data</h3>
             <p className="text-slate-400 mb-6 text-sm">

@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer, Scatter } from 'recharts';
 
 import ExportWrapper from './ExportWrapper';
+import { sampleData } from '../lib/stats';
 
 export default function SPCModule({ datasets }: { datasets: any[] }) {
   const [chartCategory, setChartCategory] = useState<'variable' | 'attribute'>('variable');
@@ -111,7 +112,7 @@ export default function SPCModule({ datasets }: { datasets: any[] }) {
               <ExportWrapper fileName={`control-chart-${chartType}`}>
                 <div className="bg-slate-800 p-4 rounded-lg border border-slate-700 h-[400px]">
                   <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={spcData.points} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+                    <LineChart data={sampleData(spcData.points, 2000)} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
                       <XAxis dataKey="id" stroke="#94a3b8" />
                       <YAxis stroke="#94a3b8" domain={['auto', 'auto']} />

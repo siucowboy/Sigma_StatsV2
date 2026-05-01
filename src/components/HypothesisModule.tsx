@@ -17,10 +17,10 @@ import {
   ComposedChart
 } from 'recharts';
 import { CheckCircle2, XCircle, AlertCircle, HelpCircle, Activity, TrendingUp } from 'lucide-react';
-import jStatModule from 'jstat';
-const jStat: any = (jStatModule as any).jStat || jStatModule;
+import * as jStatModule from 'jstat';
+const jStat: any = (jStatModule as any).default?.jStat || (jStatModule as any).jStat || (jStatModule as any).default || jStatModule;
 
-import Plotly from 'plotly.js-dist-min';
+import * as Plotly from 'plotly.js-dist-min';
 import createPlotlyComponent from 'react-plotly.js/factory';
 const Plot = createPlotlyComponent(Plotly);
 
@@ -46,7 +46,8 @@ import {
   getVarianceConfidenceInterval,
   getMean,
   getStdDev,
-  getPercentile
+  getPercentile,
+  sampleData
 } from '../lib/stats';
 
 // --- Sub-components for cleaner UI ---
@@ -149,7 +150,8 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
     if (data.length < 2) return null;
     const res = run1SampleTTest(data, Number(s1Target), s1Alt);
     const ci = getConfidenceInterval(data, 1 - alpha);
-    return { ...res, data, ci, label: s1Label, significant: res.pValue < alpha };
+    const norm = calculateAndersonDarling(data);
+    return { ...res, data, ci, norm, label: s1Label, significant: res.pValue < alpha };
   }, [activeTab, s1DataId, s1Target, s1Alt, datasets, alpha, s1Label]);
 
   // --- 2-Sample Calculations & Diagnostics ---
@@ -393,7 +395,20 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
 
     if (propType === '1samp') {
       if (pEvents1 === '' || n1 <= 0 || pTarget === '') return null;
-      return { ...run1SampleProportion(Number(pEvents1), n1, Number(pTarget), propAlt), label1: pLabel1 };
+      const res = run1SampleProportion(Number(pEvents1), n1, Number(pTarget), propAlt, 1 - alpha);
+      if (!res) return null;
+      return { 
+        ...res, 
+        label1: pLabel1, 
+        label2: 'Target',
+        e1: Number(pEvents1),
+        n1: n1,
+        p1: Number(pEvents1) / n1,
+        e2: Number(pTarget) * n1, // Virtual target events for comparison
+        n2: n1,
+        p2: Number(pTarget),
+        ci2: { nominal: Number(pTarget), lower: Number(pTarget), upper: Number(pTarget) }
+      };
     } else {
       if (pEvents1 === '' || n1 <= 0 || pEvents2 === '' || n2 <= 0) return null;
       return { ...run2SampleProportion(Number(pEvents1), n1, Number(pEvents2), n2, propAlt, pPooled, 1 - alpha), label1: pLabel1, label2: pLabel2 };
@@ -405,10 +420,19 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
     if (activeTab !== 'poisson') return null;
     if (poiType === '1samp') {
       if (poiEvents1 === '' || poiSize1 === '' || poiTargetRate === '') return null;
-      return { ...run1SamplePoisson(Number(poiEvents1), Number(poiSize1), Number(poiTargetRate), s2Alt), label1: poiLabel1 };
+      const res = run1SamplePoisson(Number(poiEvents1), Number(poiSize1), Number(poiTargetRate), s2Alt, 1 - alpha);
+      if (!res) return null;
+      return { 
+        ...res, 
+        label1: poiLabel1, 
+        label2: 'Target Rate',
+        r1: Number(poiEvents1) / Number(poiSize1),
+        r2: Number(poiTargetRate),
+        ci2: { nominal: Number(poiTargetRate), lower: Number(poiTargetRate), upper: Number(poiTargetRate) }
+      };
     } else {
       if (poiEvents1 === '' || poiSize1 === '' || poiEvents2 === '' || poiSize2 === '') return null;
-      return { ...run2SamplePoisson(Number(poiEvents1), Number(poiSize1), Number(poiEvents2), Number(poiSize2), s2Alt), label1: poiLabel1, label2: poiLabel2 };
+      return { ...run2SamplePoisson(Number(poiEvents1), Number(poiSize1), Number(poiEvents2), Number(poiSize2), s2Alt, 1 - alpha), label1: poiLabel1, label2: poiLabel2 };
     }
   }, [activeTab, poiType, poiEvents1, poiSize1, poiEvents2, poiSize2, poiTargetRate, s2Alt, poiLabel1, poiLabel2]);
 
@@ -1039,8 +1063,8 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                               />
                               <Tooltip cursor={{ strokeDasharray: '3 3' }} contentStyle={{ backgroundColor: '#0f172a' }} />
                               <ReferenceLine x={0} y={0} segment={[{x: -4, y: -4}, {x: 4, y: 4}]} stroke="#475569" strokeDasharray="3 3" />
-                              <Scatter name={s2Analysis.name1} data={s2Analysis.qq1} fill="#38bdf8" shape="circle" />
-                              <Scatter name={s2Analysis.name2} data={s2Analysis.qq2} fill="#fbbf24" shape="square" />
+                              <Scatter name={s2Analysis.name1} data={sampleData(s2Analysis.qq1, 1000)} fill="#38bdf8" shape="circle" />
+                              <Scatter name={s2Analysis.name2} data={sampleData(s2Analysis.qq2, 1000)} fill="#fbbf24" shape="square" />
                             </ScatterChart>
                           </ResponsiveContainer>
                         </div>
@@ -1335,7 +1359,7 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                           <DiagnosticIndicator 
                             label="Normality (All Groups)" 
                             passed={anovaAnalysis.isNormal} 
-                            pValue={Math.min(...anovaAnalysis.normalityResults.map(r => r.pValue))} 
+                            pValue={anovaAnalysis.normalityResults.reduce((min, r) => Math.min(min, r.pValue), anovaAnalysis.normalityResults[0].pValue)} 
                           />
                           <DiagnosticIndicator 
                             label="Equal Variance (Levene)" 
@@ -1659,80 +1683,82 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                     </div>
                   </div>
 
-                  {/* Summary Comparison Output */}
-                  <div className="bg-slate-950 p-8 rounded border-2 border-slate-800 shadow-2xl overflow-x-auto">
-                    <h4 className="text-center font-black italic text-xl text-slate-300 uppercase mb-8 tracking-[0.2em] border-b border-slate-800 pb-4">Statistical Comparison Results</h4>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-12 items-start">
-                      
-                      <div className="space-y-4">
-                        <table className="w-full text-xs font-mono border-collapse">
-                          <thead>
-                            <tr className="border-b border-slate-800 uppercase italic">
-                              <th className="text-left py-2 text-slate-500">Sample</th>
-                              <th className="text-center py-2 text-sky-400">X</th>
-                              <th className="text-center py-2 text-sky-400">N</th>
-                              <th className="text-right py-2 text-sky-400">P-Hat</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-900">
-                            <tr>
-                              <td className="py-3 text-slate-400">{(propResults as any).label1}</td>
-                              <td className="text-center text-slate-200">{(propResults as any).e1}</td>
-                              <td className="text-center text-slate-200">{(propResults as any).n1.toLocaleString()}</td>
-                              <td className="text-right text-slate-200">{(propResults as any).p1.toExponential(4)}</td>
-                            </tr>
-                            <tr>
-                              <td className="py-3 text-slate-400">{(propResults as any).label2}</td>
-                              <td className="text-center text-slate-200">{(propResults as any).e2}</td>
-                              <td className="text-center text-slate-200">{(propResults as any).n2.toLocaleString()}</td>
-                              <td className="text-right text-slate-200">{(propResults as any).p2.toExponential(4)}</td>
-                            </tr>
-                          </tbody>
-                        </table>
-                        <div className="p-3 bg-slate-900 rounded border border-slate-800 text-[10px] text-center text-slate-500 italic">
-                          Difference = p(1) - p(2)
-                        </div>
-                      </div>
-
-                      <div className="space-y-6">
-                        <div className="group border-b border-slate-800 pb-4">
-                          <label className="block text-[10px] text-slate-500 uppercase font-black mb-2 tracking-widest">Estimate of Difference</label>
-                          <div className="text-2xl font-mono text-red-400 font-black tabular-nums">
-                            {(propResults as any).diff.toExponential(8)}
+                  {/* Summary Comparison Output (Only for 2-sample) */}
+                  {propType === '2samp' && (
+                    <div className="bg-slate-950 p-8 rounded border-2 border-slate-800 shadow-2xl overflow-x-auto">
+                      <h4 className="text-center font-black italic text-xl text-slate-300 uppercase mb-8 tracking-[0.2em] border-b border-slate-800 pb-4">Statistical Comparison Results</h4>
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-12 items-start">
+                        
+                        <div className="space-y-4">
+                          <table className="w-full text-xs font-mono border-collapse">
+                            <thead>
+                              <tr className="border-b border-slate-800 uppercase italic">
+                                <th className="text-left py-2 text-slate-500">Sample</th>
+                                <th className="text-center py-2 text-sky-400">X</th>
+                                <th className="text-center py-2 text-sky-400">N</th>
+                                <th className="text-right py-2 text-sky-400">P-Hat</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-900">
+                              <tr>
+                                <td className="py-3 text-slate-400">{(propResults as any).label1}</td>
+                                <td className="text-center text-slate-200">{(propResults as any).e1}</td>
+                                <td className="text-center text-slate-200">{(propResults as any).n1.toLocaleString()}</td>
+                                <td className="text-right text-slate-200">{(propResults as any).p1.toExponential(4)}</td>
+                              </tr>
+                              <tr>
+                                <td className="py-3 text-slate-400">{(propResults as any).label2}</td>
+                                <td className="text-center text-slate-200">{(propResults as any).e2}</td>
+                                <td className="text-center text-slate-200">{(propResults as any).n2.toLocaleString()}</td>
+                                <td className="text-right text-slate-200">{(propResults as any).p2.toExponential(4)}</td>
+                              </tr>
+                            </tbody>
+                          </table>
+                          <div className="p-3 bg-slate-900 rounded border border-slate-800 text-[10px] text-center text-slate-500 italic">
+                            Difference = p(1) - p(2)
                           </div>
                         </div>
 
-                        <div className="group border-b border-slate-800 pb-4">
-                          <label className="block text-[10px] text-slate-500 uppercase font-black mb-2 tracking-widest">
-                            {(1-alpha)*100}% Bound for Difference
-                          </label>
-                          <div className="text-xl font-mono text-red-500 font-black tabular-nums">
-                            {(propResults as any).diffLower !== null 
-                              ? (propResults as any).diffLower.toExponential(8) 
-                              : (propResults as any).diffUpper?.toExponential(8)}
+                        <div className="space-y-6">
+                          <div className="group border-b border-slate-800 pb-4">
+                            <label className="block text-[10px] text-slate-500 uppercase font-black mb-2 tracking-widest">Estimate of Difference</label>
+                            <div className="text-2xl font-mono text-red-400 font-black tabular-nums">
+                              {(propResults as any).diff.toExponential(8)}
+                            </div>
                           </div>
-                          <div className="text-[10px] text-slate-600 mt-1 italic uppercase">
-                            Analysis based on {propAlt} alternative
+
+                          <div className="group border-b border-slate-800 pb-4">
+                            <label className="block text-[10px] text-slate-500 uppercase font-black mb-2 tracking-widest">
+                              {(1-alpha)*100}% Bound for Difference
+                            </label>
+                            <div className="text-xl font-mono text-red-500 font-black tabular-nums">
+                              {(propResults as any).diffLower !== null 
+                                ? (propResults as any).diffLower.toExponential(8) 
+                                : (propResults as any).diffUpper?.toExponential(8)}
+                            </div>
+                            <div className="text-[10px] text-slate-600 mt-1 italic uppercase">
+                              Analysis based on {propAlt} alternative
+                            </div>
                           </div>
                         </div>
-                      </div>
 
-                      <div className="space-y-6">
-                        <div className="grid grid-cols-2 gap-8">
-                          <div className="bg-slate-900 p-4 border border-slate-800 rounded">
-                            <label className="block text-[10px] text-slate-500 uppercase font-black mb-2 tracking-widest">Z-Stat</label>
-                            <div className="text-2xl font-mono text-white">{(propResults as any).statistic.toFixed(2)}</div>
-                          </div>
-                          <div className={`p-4 border rounded ${propResults.pValue < alpha ? 'bg-red-500/10 border-red-500/50' : 'bg-green-500/10 border-green-500/50'}`}>
-                            <label className="block text-[10px] text-slate-500 uppercase font-black mb-2 tracking-widest">P-Value</label>
-                            <div className={`text-2xl font-mono font-black ${propResults.pValue < alpha ? 'text-red-500' : 'text-green-500'}`}>
-                              {propResults.pValue.toFixed(4)}
+                        <div className="space-y-6">
+                          <div className="grid grid-cols-2 gap-8">
+                            <div className="bg-slate-900 p-4 border border-slate-800 rounded">
+                              <label className="block text-[10px] text-slate-500 uppercase font-black mb-2 tracking-widest">Z-Stat</label>
+                              <div className="text-2xl font-mono text-white">{(propResults as any).statistic.toFixed(2)}</div>
+                            </div>
+                            <div className={`p-4 border rounded ${propResults.pValue < alpha ? 'bg-red-500/10 border-red-500/50' : 'bg-green-500/10 border-green-500/50'}`}>
+                              <label className="block text-[10px] text-slate-500 uppercase font-black mb-2 tracking-widest">P-Value</label>
+                              <div className={`text-2xl font-mono font-black ${propResults.pValue < alpha ? 'text-red-500' : 'text-green-500'}`}>
+                                {propResults.pValue.toFixed(4)}
+                              </div>
                             </div>
                           </div>
                         </div>
                       </div>
                     </div>
-                  </div>
+                  )}
                 </div>
               )}
             </div>

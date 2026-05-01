@@ -15,9 +15,11 @@ import {
   Bar,
   BarChart
 } from 'recharts';
-import Plot from 'react-plotly.js';
+import * as Plotly from 'plotly.js-dist-min';
+import createPlotlyComponent from 'react-plotly.js/factory';
+const Plot = createPlotlyComponent(Plotly);
 import ExportWrapper from './ExportWrapper';
-import { runMultipleRegression, generateDynamicHistogram } from '../lib/stats';
+import { runMultipleRegression, generateDynamicHistogram, sampleData } from '../lib/stats';
 import { Activity, TrendingUp, Info, Layout, Box, LineChart, BarChart2 } from 'lucide-react';
 
 export default function RegressionModule({ datasets }: { datasets: any[] }) {
@@ -48,6 +50,10 @@ export default function RegressionModule({ datasets }: { datasets: any[] }) {
 
     return runMultipleRegression(yData, xDataMatrix, xNames);
   }, [responseId, predictorIds, datasets]);
+
+  // Sampled Diagnostics for Huge Datasets
+  const sampledProbPlot = useMemo(() => sampleData(results?.probPlot || [], 1000), [results?.probPlot]);
+  const sampledResiduals = useMemo(() => sampleData(results?.residuals || [], 1000), [results?.residuals]);
 
   // Sync plotPredictors when predictorIds change
   useMemo(() => {
@@ -375,17 +381,18 @@ export default function RegressionModule({ datasets }: { datasets: any[] }) {
                           }
                         });
 
-                        const minX = Math.min(...currentX.values.map(Number));
-                        const maxX = Math.max(...currentX.values.map(Number));
+                        const xNums = currentX.values.map(Number);
+                        const minX = xNums.reduce((a, b) => Math.min(a, b), xNums[0]);
+                        const maxX = xNums.reduce((a, b) => Math.max(a, b), xNums[0]);
                         const coeff = results.coeffs[xIdx + 1].coeff;
 
                         return (
                             <ResponsiveContainer width="100%" height="100%">
                               <ComposedChart 
-                                data={currentX.values.map((v: any, i: number) => ({
+                                data={sampleData(currentX.values.map((v: any, i: number) => ({
                                     xValue: Number(v),
                                     yValue: Number(responseDataset.values[i])
-                                }))}
+                                })), 1000)}
                                 margin={{ top: 20, right: 30, left: 20, bottom: 20 }}
                               >
                                 <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
@@ -441,11 +448,17 @@ export default function RegressionModule({ datasets }: { datasets: any[] }) {
                         <XAxis type="number" dataKey="theoretical" name="Theoretical Quantile" stroke="#475569" domain={['auto', 'auto']} label={{ value: 'Theoretical', position: 'insideBottom', offset: -5, fontSize: 10, fill: '#475569' }} />
                         <YAxis type="number" dataKey="observed" name="Residual" stroke="#475569" domain={['auto', 'auto']} label={{ value: 'Residual', angle: -90, position: 'insideLeft', fontSize: 10, fill: '#475569' }} />
                         <RechartsTooltip cursor={{ strokeDasharray: '3 3' }} contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', fontSize: '10px' }} />
-                        <Scatter data={results.probPlot} name="Residuals" fill="#38bdf8" />
+                        <Scatter data={sampledProbPlot} name="Residuals" fill="#38bdf8" />
                         <ReferenceLine 
                           segment={[
-                            { x: Math.min(...results.probPlot.map(p => p.theoretical)), y: Math.min(...results.probPlot.map(p => p.theoretical)) * results.s },
-                            { x: Math.max(...results.probPlot.map(p => p.theoretical)), y: Math.max(...results.probPlot.map(p => p.theoretical)) * results.s }
+                            { 
+                              x: results.probPlot.reduce((a, b) => Math.min(a, b.theoretical), results.probPlot[0].theoretical), 
+                              y: results.probPlot.reduce((a, b) => Math.min(a, b.theoretical), results.probPlot[0].theoretical) * results.s 
+                            },
+                            { 
+                              x: results.probPlot.reduce((a, b) => Math.max(a, b.theoretical), results.probPlot[0].theoretical), 
+                              y: results.probPlot.reduce((a, b) => Math.max(a, b.theoretical), results.probPlot[0].theoretical) * results.s 
+                            }
                           ]}
                           stroke="#ef4444"
                           strokeDasharray="5 5"
@@ -466,7 +479,7 @@ export default function RegressionModule({ datasets }: { datasets: any[] }) {
                         <YAxis dataKey="res" type="number" name="Residual" stroke="#475569" domain={['auto', 'auto']} label={{ value: 'Residual', angle: -90, position: 'insideLeft', fontSize: 10, fill: '#475569' }} />
                         <RechartsTooltip cursor={{ strokeDasharray: '3 3' }} contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', fontSize: '10px' }} />
                         <ReferenceLine y={0} stroke="#ef4444" strokeDasharray="5 5" />
-                        <Scatter data={results.residuals} fill="#fb7185" />
+                        <Scatter data={sampledResiduals} fill="#fb7185" />
                       </ScatterChart>
                     </ResponsiveContainer>
                   </div>
@@ -497,7 +510,7 @@ export default function RegressionModule({ datasets }: { datasets: any[] }) {
                     <div className="text-[10px] text-center text-slate-500 mb-4 uppercase font-bold tracking-widest">Versus Order</div>
                     <ResponsiveContainer width="100%" height="85%">
                       <ComposedChart 
-                        data={results.residuals.map(r => ({ obsOrder: r.order, resid: r.res }))} 
+                        data={sampleData(results.residuals.map(r => ({ obsOrder: r.order, resid: r.res })), 1000)} 
                         margin={{ top: 10, right: 30, bottom: 20, left: 10 }}
                       >
                         <CartesianGrid strokeDasharray="3 3" stroke="#334155" />

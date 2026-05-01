@@ -17,6 +17,7 @@
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "html-to-image": "^1.11.13",
+    "idb-keyval": "^6.2.2",
     "jstat": "^1.9.6",
     "lucide-react": "^0.546.0",
     "mathjs": "^15.2.0",

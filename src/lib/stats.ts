@@ -1,7 +1,8 @@
-import jStatModule from 'jstat';
-const jStat: any = (jStatModule as any).jStat || jStatModule;
+import * as jStatModule from 'jstat';
+const jStat: any = (jStatModule as any).default?.jStat || (jStatModule as any).jStat || (jStatModule as any).default || jStatModule;
 
-// --- Core Descriptive Statistics ---
+import { create, all } from 'mathjs';
+const math = create(all);
 export function getMean(data: number[]): number {
   if (!data.length) return 0;
   return data.reduce((a, b) => a + b, 0) / data.length;
@@ -142,9 +143,8 @@ export function analyzeCapability(params: any) {
 }
 
 // --- Regression Engine ---
-import * as math from 'mathjs';
 
-export function runMultipleRegression(yData: number[], xDataMatrix: number[][], xNames: string[]) {
+export function runMultipleRegression(yData: number[], xDataMatrix: number[][], xNames: string[], calculateVIF = true) {
   const n = yData.length;
   const k = xDataMatrix.length; // Number of predictors
   
@@ -168,16 +168,20 @@ export function runMultipleRegression(yData: number[], xDataMatrix: number[][], 
   
   let XtX_inv;
   try {
-    XtX_inv = math.inv(XtX);
+    const inv = math.inv(XtX);
+    // Normalize to array of arrays if it's a matrix object
+    XtX_inv = (inv as any).toArray ? (inv as any).toArray() : inv;
   } catch (e) {
     return null; // Singular matrix
   }
   
   const XtY = math.multiply(Xt, Y);
-  const beta = math.multiply(XtX_inv, XtY) as any;
+  const betaMat = math.multiply(XtX_inv, XtY);
+  const beta = (betaMat as any).toArray ? (betaMat as any).toArray() : betaMat;
 
   // Predictions & Residuals
-  const Y_hat = math.multiply(X, beta) as any;
+  const Y_hat_mat = math.multiply(X, beta);
+  const Y_hat = (Y_hat_mat as any).toArray ? (Y_hat_mat as any).toArray() : Y_hat_mat;
   const residuals = yData.map((y, i) => y - Y_hat[i][0]);
 
   // SSE, SSR, SST
@@ -206,22 +210,27 @@ export function runMultipleRegression(yData: number[], xDataMatrix: number[][], 
 
   // VIF & Tolerance
   const vif: number[] = [];
-  if (k > 1) {
+  if (calculateVIF && k > 1) {
     for (let j = 0; j < k; j++) {
       // Regress Xj against other X's
       const y_vif = xDataMatrix[j];
       const x_vif = xDataMatrix.filter((_, idx) => idx !== j);
       const names_vif = xNames.filter((_, idx) => idx !== j);
-      const subReg = runMultipleRegression(y_vif, x_vif, names_vif);
+      // RECURSION GUARD: Set calculateVIF to false for sub-regressions
+      const subReg = runMultipleRegression(y_vif, x_vif, names_vif, false);
       if (subReg) {
-        const v = 1 / (1 - subReg.rSq);
+        // VIF = 1 / (1 - R_square_j)
+        // Guard against division by zero (perfect colinearity)
+        const denominator = 1 - subReg.rSq;
+        const v = denominator <= 0 ? 999.99 : 1 / denominator;
         vif.push(v);
       } else {
         vif.push(1); // Default if singular
       }
     }
   } else {
-    vif.push(1);
+    // Fill with 1.0 or whatever is appropriate if VIF is not calculated
+    for (let j = 0; j < k; j++) vif.push(1);
   }
 
   // Standard Errors of Coefficients
@@ -291,8 +300,8 @@ export function generateDynamicHistogram(data: number[]) {
   // Sturges' Formula for dynamic bin count
   const numBins = Math.max(5, Math.ceil(Math.log2(n) + 1));
   
-  const min = Math.min(...data);
-  const max = Math.max(...data);
+  const min = data.reduce((a, b) => Math.min(a, b), data[0]);
+  const max = data.reduce((a, b) => Math.max(a, b), data[0]);
   
   if (min === max) return [{ x: min, count: n }];
 
@@ -461,6 +470,19 @@ export function calculateAndersonDarling(data: number[]) {
   else pValue = 1 - Math.exp(-13.436 + 101.14 * A2_adjusted - 223.73 * Math.pow(A2_adjusted, 2));
 
   return { statistic: A2_adjusted, pValue };
+}
+
+/**
+ * Uniformly samples a dataset to a target size to prevent UI/Chart performance crashes
+ */
+export function sampleData<T>(data: T[], maxPoints: number = 3000): T[] {
+  if (!data || data.length <= maxPoints) return data;
+  const step = data.length / maxPoints;
+  const sampled: T[] = [];
+  for (let i = 0; i < maxPoints; i++) {
+    sampled.push(data[Math.floor(i * step)]);
+  }
+  return sampled;
 }
 
 export function generateQQData(data: number[]) {
@@ -685,10 +707,11 @@ export function runChiSquareGoodnessOfFit(observed: number[], expected: number[]
   const df = n - 1;
   const pValue = 1 - jStat.chisquare.cdf(chi2, df);
 
-  return { statistic: chi2, pValue, df, expected, testName: 'Chi-Square Goodness-of-Fit' };
+  return { statistic: chi2, pValue, df, observed, expected, testName: 'Chi-Square Goodness-of-Fit' };
 }
 
 export function runChiSquareIndependence(matrix: number[][]) {
+  if (!matrix || matrix.length < 2 || !matrix[0] || matrix[0].length < 2) return null;
   const rows = matrix.length;
   const cols = matrix[0].length;
   if (rows < 2 || cols < 2) return null;
@@ -721,7 +744,7 @@ export function runChiSquareIndependence(matrix: number[][]) {
 
 // --- Proportion Tests ---
 
-export function run1SampleProportion(events: number, trials: number, target: number, alternative: string = 'neq') {
+export function run1SampleProportion(events: number, trials: number, target: number, alternative: string = 'neq', confidence: number = 0.95) {
   if (trials <= 0) return null;
   const p = events / trials;
   
@@ -730,16 +753,28 @@ export function run1SampleProportion(events: number, trials: number, target: num
   const se = Math.sqrt((target * (1 - target)) / trials);
   const z = se === 0 ? 0 : (p - target) / se;
 
-  let pValue: number;
+  let pValueComputed: number;
   if (alternative === 'greater') {
-    pValue = 1 - jStat.normal.cdf(z, 0, 1);
+    pValueComputed = 1 - jStat.normal.cdf(z, 0, 1);
   } else if (alternative === 'less') {
-    pValue = jStat.normal.cdf(z, 0, 1);
+    pValueComputed = jStat.normal.cdf(z, 0, 1);
   } else {
-    pValue = 2 * (1 - jStat.normal.cdf(Math.abs(z), 0, 1));
+    pValueComputed = 2 * (1 - jStat.normal.cdf(Math.abs(z), 0, 1));
   }
 
-  return { statistic: z, pValue, p, trials, events, target, testName: '1-Sample Proportion (Z-Test)' };
+  // Confidence Intervals for individual proportions (Normal approx)
+  const zAlpha = jStat.normal.inv(1 - (1 - confidence) / 2, 0, 1);
+  const getCI = (eventsVal: number, trialsVal: number) => {
+    const phat = eventsVal / trialsVal;
+    const seVal = Math.sqrt((phat * (1 - phat)) / trialsVal);
+    return {
+      nominal: phat,
+      lower: Math.max(0, phat - zAlpha * seVal),
+      upper: Math.min(1, phat + zAlpha * seVal)
+    };
+  };
+
+  return { statistic: z, pValue: pValueComputed, p, trials, events, target, ci1: getCI(events, trials), testName: '1-Sample Proportion (Z-Test)' };
 }
 
 export function run2SampleProportion(e1: number, n1: number, e2: number, n2: number, alternative: string = 'neq', pooled: boolean = true, confidence: number = 0.95) {
@@ -811,7 +846,7 @@ export function run2SampleProportion(e1: number, n1: number, e2: number, n2: num
 
 // --- Poisson Tests ---
 
-export function run1SamplePoisson(events: number, sampleSize: number, targetRate: number, alternative: string = 'neq') {
+export function run1SamplePoisson(events: number, sampleSize: number, targetRate: number, alternative: string = 'neq', confidence: number = 0.95) {
   if (sampleSize <= 0) return null;
   const rate = events / sampleSize;
   const lambda = targetRate * sampleSize;
@@ -838,10 +873,19 @@ export function run1SamplePoisson(events: number, sampleSize: number, targetRate
     pValue = Math.min(1, sumP);
   }
 
-  return { statistic: rate, pValue, rate, events, sampleSize, targetRate, testName: '1-Sample Poisson Rate Test' };
+  // Poisson CI (Normal approximation for rate)
+  const zAlpha = jStat.normal.inv(1 - (1 - confidence) / 2, 0, 1);
+  const se = Math.sqrt(rate / sampleSize);
+  const ci1 = {
+    nominal: rate,
+    lower: Math.max(0, rate - zAlpha * se),
+    upper: rate + zAlpha * se
+  };
+
+  return { statistic: rate, pValue, rate, events, sampleSize, targetRate, ci1, testName: '1-Sample Poisson Rate Test' };
 }
 
-export function run2SamplePoisson(e1: number, s1: number, e2: number, s2: number, alternative: string = 'neq') {
+export function run2SamplePoisson(e1: number, s1: number, e2: number, s2: number, alternative: string = 'neq', confidence: number = 0.95) {
   if (s1 <= 0 || s2 <= 0) return null;
   const r1 = e1 / s1;
   const r2 = e2 / s2;
@@ -860,7 +904,18 @@ export function run2SamplePoisson(e1: number, s1: number, e2: number, s2: number
     pValue = 2 * (1 - jStat.normal.cdf(Math.abs(z), 0, 1));
   }
 
-  return { statistic: z, pValue, r1, r2, s1, s2, e1, e2, testName: '2-Sample Poisson Rate (Z-Test)' };
+  const zAlpha = jStat.normal.inv(1 - (1 - confidence) / 2, 0, 1);
+  const getPoiCI = (e: number, s: number) => {
+    const r = e / s;
+    const serr = Math.sqrt(r / s);
+    return {
+      nominal: r,
+      lower: Math.max(0, r - zAlpha * serr),
+      upper: r + zAlpha * serr
+    };
+  };
+
+  return { statistic: z, pValue, r1, r2, s1, s2, e1, e2, ci1: getPoiCI(e1, s1), ci2: getPoiCI(e2, s2), testName: '2-Sample Poisson Rate (Z-Test)' };
 }
 
 export function getMedianConfidenceInterval(data: number[], confidence = 0.95) {
@@ -911,7 +966,9 @@ function calculateRBarStdDev(data: number[], subgroupSize: number): number {
   for (let i = 0; i < data.length; i += subgroupSize) {
     const group = data.slice(i, i + subgroupSize);
     if (group.length === subgroupSize) {
-      rangeSum += (Math.max(...group) - Math.min(...group));
+      const gMin = group.reduce((a, b) => Math.min(a, b), group[0]);
+      const gMax = group.reduce((a, b) => Math.max(a, b), group[0]);
+      rangeSum += (gMax - gMin);
       validGroups++;
     }
   }

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Database, BarChart2, Activity, TrendingUp, Grid, GitCommit } from 'lucide-react';
+import { get, set } from 'idb-keyval';
 import DataManager from './components/DataManager';
 import CapabilityModule from './components/CapabilityModule';
 import HypothesisModule from './components/HypothesisModule';
@@ -16,16 +17,50 @@ export interface Dataset {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('data');
+  const [isInitialized, setIsInitialized] = useState(false);
   
-  // LocalStorage Persistence
-  const [datasets, setDatasets] = useState<Dataset[]>(() => {
-    const saved = localStorage.getItem('sigmaStats_datasets');
-    return saved ? JSON.parse(saved) : [];
-  });
+  // Persistence with IndexedDB (via idb-keyval)
+  const [datasets, setDatasets] = useState<Dataset[]>([]);
 
+  // Load datasets on mount
   useEffect(() => {
-    localStorage.setItem('sigmaStats_datasets', JSON.stringify(datasets));
-  }, [datasets]);
+    async function loadData() {
+      try {
+        // Try IndexedDB first
+        const saved = await get<Dataset[]>('sigmaStats_datasets');
+        if (saved) {
+          setDatasets(saved);
+        } else {
+          // Fallback to legacy localStorage if indexedDB is empty
+          const legacy = localStorage.getItem('sigmaStats_datasets');
+          if (legacy) {
+            const parsed = JSON.parse(legacy);
+            setDatasets(parsed);
+          }
+        }
+      } catch (e) {
+        console.error('Failed to load datasets:', e);
+      } finally {
+        setIsInitialized(true);
+      }
+    }
+    loadData();
+  }, []);
+
+  // Save datasets on change (debounced)
+  useEffect(() => {
+    if (!isInitialized) return;
+
+    const handler = setTimeout(async () => {
+      try {
+        await set('sigmaStats_datasets', datasets);
+      } catch (e) {
+        console.error('Failed to save datasets to IndexedDB:', e);
+      }
+    }, 1000);
+
+    return () => clearTimeout(handler);
+  }, [datasets, isInitialized]);
 
   const navItems = [
     { id: 'data', label: 'Data Manager', icon: Database },
