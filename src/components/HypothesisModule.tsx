@@ -35,6 +35,12 @@ import {
   runANOVA,
   runKruskalWallis,
   runWelchANOVA,
+  runChiSquareGoodnessOfFit,
+  runChiSquareIndependence,
+  run1SampleProportion,
+  run2SampleProportion,
+  run1SamplePoisson,
+  run2SamplePoisson,
   getConfidenceInterval, 
   getMedianConfidenceInterval,
   getVarianceConfidenceInterval,
@@ -71,6 +77,7 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
   
   // 1-Sample Props
   const [s1DataId, setS1DataId] = useState('');
+  const [s1Label, setS1Label] = useState('Sample 1');
   const [s1Target, setS1Target] = useState<number | ''>(0);
   const [s1Alt, setS1Alt] = useState('neq');
 
@@ -78,6 +85,8 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
   const [s2InputType, setS2InputType] = useState<'unstacked' | 'stacked'>('unstacked');
   const [s2Data1Id, setS2Data1Id] = useState('');
   const [s2Data2Id, setS2Data2Id] = useState('');
+  const [s2Label1, setS2Label1] = useState('Sample 1');
+  const [s2Label2, setS2Label2] = useState('Sample 2');
   const [s2ValueId, setS2ValueId] = useState('');
   const [s2GroupId, setS2GroupId] = useState('');
   const [s2Alt, setS2Alt] = useState('neq');
@@ -85,8 +94,45 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
   const tabs = [
     { id: '1-sample', label: '1-Sample T-Test' },
     { id: '2-sample', label: 'Two-Sample Analysis' },
-    { id: 'anova', label: 'ANOVA (3 or More)' }
+    { id: 'anova', label: 'ANOVA (3+ Groups)' },
+    { id: 'chi-square', label: 'Chi-Squared' },
+    { id: 'proportion', label: 'Proportions' },
+    { id: 'poisson', label: 'Poisson' }
   ];
+
+  // Chi-Square State
+  const [chiType, setChiType] = useState<'gof' | 'independence'>('independence');
+  const [chiLabelR, setChiLabelR] = useState('Rows');
+  const [chiLabelC, setChiLabelC] = useState('Columns');
+  const [chiObsText, setChiObsText] = useState('20, 30\n35, 15');
+  const [chiGOFObs, setChiGOFObs] = useState('50, 45, 60');
+  const [chiGOFExp, setChiGOFExp] = useState('51.6, 51.6, 51.6');
+
+  // Proportion State
+  const [propType, setPropType] = useState<'1samp' | '2samp'>('2samp');
+  const [pLabel1, setPLabel1] = useState('Sample A');
+  const [pLabel2, setPLabel2] = useState('Sample B');
+  const [pUnits1, setPUnits1] = useState<number | ''>(1000000);
+  const [pOpps1, setPOpps1] = useState<number | ''>(1);
+  const [pEvents1, setPEvents1] = useState<number | ''>(30);
+  
+  const [pUnits2, setPUnits2] = useState<number | ''>(1000000);
+  const [pOpps2, setPOpps2] = useState<number | ''>(1);
+  const [pEvents2, setPEvents2] = useState<number | ''>(60);
+  
+  const [pTarget, setPTarget] = useState<number | ''>(0.5);
+  const [pPooled, setPPooled] = useState(true);
+  const [propAlt, setPropAlt] = useState('greater');
+
+  // Poisson State
+  const [poiType, setPoiType] = useState<'1samp' | '2samp'>('1samp');
+  const [poiLabel1, setPoiLabel1] = useState('Sample 1');
+  const [poiLabel2, setPoiLabel2] = useState('Sample 2');
+  const [poiEvents1, setPoiEvents1] = useState<number | ''>(15);
+  const [poiSize1, setPoiSize1] = useState<number | ''>(100);
+  const [poiEvents2, setPoiEvents2] = useState<number | ''>(18);
+  const [poiSize2, setPoiSize2] = useState<number | ''>(100);
+  const [poiTargetRate, setPoiTargetRate] = useState<number | ''>(0.12);
 
   // ANOVA State
   const [alpha, setAlpha] = useState(0.05);
@@ -94,6 +140,7 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
   const [anovaValueId, setAnovaValueId] = useState('');
   const [anovaGroupId, setAnovaGroupId] = useState('');
   const [anovaMultiIds, setAnovaMultiIds] = useState<string[]>(['', '', '']);
+  const [anovaCustomLabels, setAnovaCustomLabels] = useState<string[]>(['Group 1', 'Group 2', 'Group 3']);
 
   // --- 1-Sample Calculations ---
   const s1Results = useMemo(() => {
@@ -102,8 +149,8 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
     if (data.length < 2) return null;
     const res = run1SampleTTest(data, Number(s1Target), s1Alt);
     const ci = getConfidenceInterval(data, 1 - alpha);
-    return { ...res, data, ci, significant: res.pValue < alpha };
-  }, [activeTab, s1DataId, s1Target, s1Alt, datasets, alpha]);
+    return { ...res, data, ci, label: s1Label, significant: res.pValue < alpha };
+  }, [activeTab, s1DataId, s1Target, s1Alt, datasets, alpha, s1Label]);
 
   // --- 2-Sample Calculations & Diagnostics ---
   const s2Analysis = useMemo(() => {
@@ -111,8 +158,8 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
 
     let data1: number[] = [];
     let data2: number[] = [];
-    let name1 = 'Sample 1';
-    let name2 = 'Sample 2';
+    let name1 = s2Label1;
+    let name2 = s2Label2;
 
     if (s2InputType === 'unstacked') {
       const d1 = datasets.find(d => d.id === s2Data1Id);
@@ -120,8 +167,9 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
       if (!d1 || !d2) return null;
       data1 = d1.values.filter((v: any) => typeof v === 'number' && !isNaN(v));
       data2 = d2.values.filter((v: any) => typeof v === 'number' && !isNaN(v));
-      name1 = d1.name;
-      name2 = d2.name;
+      // Use custom labels if provided, otherwise dataset names
+      if (name1 === 'Sample 1') name1 = d1.name;
+      if (name2 === 'Sample 2') name2 = d2.name;
     } else {
       const valCol = datasets.find(d => d.id === s2ValueId);
       const grpCol = datasets.find(d => d.id === s2GroupId);
@@ -130,8 +178,9 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
       const groups = [...new Set(grpCol.values)].filter(g => g !== null && g !== undefined);
       if (groups.length < 2) return null;
       
-      name1 = String(groups[0]);
-      name2 = String(groups[1]);
+      // Use custom labels as overrides if they aren't the defaults
+      name1 = s2Label1 !== 'Sample 1' ? s2Label1 : String(groups[0]);
+      name2 = s2Label2 !== 'Sample 2' ? s2Label2 : String(groups[1]);
       
       valCol.values.forEach((v: any, i: number) => {
         if (typeof v === 'number' && !isNaN(v)) {
@@ -216,6 +265,7 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
 
     return {
       data1, data2, name1, name2,
+      label1: s2Label1, label2: s2Label2,
       norm1, norm2, isNormal,
       varTest, equalVar, varTestType: isNormal ? 'F-Test' : "Levene's Test",
       testType, results, ci,
@@ -230,7 +280,7 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
       qq1, qq2,
       significant
     };
-  }, [activeTab, s2InputType, s2Data1Id, s2Data2Id, s2ValueId, s2GroupId, s2Alt, datasets, alpha]);
+  }, [activeTab, s2InputType, s2Data1Id, s2Data2Id, s2ValueId, s2GroupId, s2Alt, datasets, alpha, s2Label1, s2Label2]);
 
   // --- ANOVA Calculations & Diagnostics ---
   const anovaAnalysis = useMemo(() => {
@@ -253,11 +303,11 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
       }
     } else {
       groups = anovaMultiIds
-        .map(id => {
+        .map((id, idx) => {
           const ds = datasets.find(d => d.id === id);
           if (!ds) return { name: '', data: [] };
           return {
-            name: ds.name,
+            name: anovaCustomLabels[idx] || ds.name,
             data: ds.values.map((v: any) => Number(v)).filter((v: any) => !isNaN(v))
           };
         })
@@ -320,6 +370,48 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
     };
   }, [activeTab, anovaInputType, anovaValueId, anovaGroupId, anovaMultiIds, alpha, datasets]);
 
+  // --- Chi-Squared Calculations ---
+  const chiResults = useMemo(() => {
+    if (activeTab !== 'chi-square') return null;
+    if (chiType === 'gof') {
+      const obs = chiGOFObs.split(',').map(v => Number(v.trim())).filter(v => !isNaN(v));
+      const exp = chiGOFExp.split(',').map(v => Number(v.trim())).filter(v => !isNaN(v));
+      if (obs.length < 2 || obs.length !== exp.length) return null;
+      return runChiSquareGoodnessOfFit(obs, exp);
+    } else {
+      const matrix = chiObsText.split('\n').map(row => row.split(',').map(v => Number(v.trim())).filter(v => !isNaN(v))).filter(r => r.length > 0);
+      if (matrix.length < 2 || matrix[0].length < 2) return null;
+      return runChiSquareIndependence(matrix);
+    }
+  }, [activeTab, chiType, chiGOFObs, chiGOFExp, chiObsText]);
+
+  // --- Proportion Calculations ---
+  const propResults = useMemo(() => {
+    if (activeTab !== 'proportion') return null;
+    const n1 = (Number(pUnits1) || 0) * (Number(pOpps1) || 0);
+    const n2 = (Number(pUnits2) || 0) * (Number(pOpps2) || 0);
+
+    if (propType === '1samp') {
+      if (pEvents1 === '' || n1 <= 0 || pTarget === '') return null;
+      return { ...run1SampleProportion(Number(pEvents1), n1, Number(pTarget), propAlt), label1: pLabel1 };
+    } else {
+      if (pEvents1 === '' || n1 <= 0 || pEvents2 === '' || n2 <= 0) return null;
+      return { ...run2SampleProportion(Number(pEvents1), n1, Number(pEvents2), n2, propAlt, pPooled, 1 - alpha), label1: pLabel1, label2: pLabel2 };
+    }
+  }, [activeTab, propType, pEvents1, pUnits1, pOpps1, pEvents2, pUnits2, pOpps2, pTarget, propAlt, pPooled, alpha, pLabel1, pLabel2]);
+
+  // --- Poisson Calculations ---
+  const poiResults = useMemo(() => {
+    if (activeTab !== 'poisson') return null;
+    if (poiType === '1samp') {
+      if (poiEvents1 === '' || poiSize1 === '' || poiTargetRate === '') return null;
+      return { ...run1SamplePoisson(Number(poiEvents1), Number(poiSize1), Number(poiTargetRate), s2Alt), label1: poiLabel1 };
+    } else {
+      if (poiEvents1 === '' || poiSize1 === '' || poiEvents2 === '' || poiSize2 === '') return null;
+      return { ...run2SamplePoisson(Number(poiEvents1), Number(poiSize1), Number(poiEvents2), Number(poiSize2), s2Alt), label1: poiLabel1, label2: poiLabel2 };
+    }
+  }, [activeTab, poiType, poiEvents1, poiSize1, poiEvents2, poiSize2, poiTargetRate, s2Alt, poiLabel1, poiLabel2]);
+
   return (
     <div className="p-6 bg-slate-900 text-slate-100 min-h-screen">
       <div className="flex justify-between items-center mb-6">
@@ -353,18 +445,30 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
             
             {activeTab === '1-sample' && (
               <div className="space-y-4">
-                <label className="block text-xs uppercase text-slate-500 font-bold">Variable</label>
-                <select className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm" value={s1DataId} onChange={e => setS1DataId(e.target.value)}>
-                  <option value="">Select Data...</option>
-                  {datasets.filter(d => d.isNumeric).map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-                </select>
+                <div>
+                  <label className="block text-xs uppercase text-slate-500 font-bold mb-1">Sample Name</label>
+                  <input 
+                    type="text" 
+                    value={s1Label} 
+                    onChange={e => setS1Label(e.target.value)} 
+                    className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm text-sky-400"
+                    placeholder="Sample 1"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs uppercase text-slate-500 font-bold mb-1">Variable</label>
+                  <select className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm text-slate-200" value={s1DataId} onChange={e => setS1DataId(e.target.value)}>
+                    <option value="">Select Data...</option>
+                    {datasets.filter(d => d.isNumeric).map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                  </select>
+                </div>
                 <label className="block text-xs uppercase text-slate-500 font-bold">Null Hypothesis (H₀: μ = X)</label>
                 <input type="number" value={s1Target} onChange={e => setS1Target(e.target.value === '' ? '' : Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm" />
                 <label className="block text-xs uppercase text-slate-500 font-bold">Alternative (H₁)</label>
                 <select className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm" value={s1Alt} onChange={e => setS1Alt(e.target.value)}>
-                  <option value="neq">Mean ≠ Target</option>
-                  <option value="greater">Mean &gt; Target</option>
-                  <option value="less">Mean &lt; Target</option>
+                  <option value="neq">{s1Label} ≠ Target</option>
+                  <option value="greater">{s1Label} &gt; Target</option>
+                  <option value="less">{s1Label} &lt; Target</option>
                 </select>
               </div>
             )}
@@ -385,6 +489,27 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                   >
                     Stacked
                   </button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] uppercase text-slate-500 font-bold mb-1">Label 1</label>
+                    <input 
+                      type="text" 
+                      value={s2Label1} 
+                      onChange={e => setS2Label1(e.target.value)} 
+                      className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-xs text-sky-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] uppercase text-slate-500 font-bold mb-1">Label 2</label>
+                    <input 
+                      type="text" 
+                      value={s2Label2} 
+                      onChange={e => setS2Label2(e.target.value)} 
+                      className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-xs text-sky-400"
+                    />
+                  </div>
                 </div>
 
                 {s2InputType === 'unstacked' ? (
@@ -417,9 +542,9 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
 
                 <label className="block text-xs uppercase text-slate-500 font-bold">Alternative (H₁)</label>
                 <select className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm" value={s2Alt} onChange={e => setS2Alt(e.target.value)}>
-                  <option value="neq">Sample 1 ≠ Sample 2</option>
-                  <option value="greater">Sample 1 &gt; Sample 2</option>
-                  <option value="less">Sample 1 &lt; Sample 2</option>
+                  <option value="neq">{s2Label1} ≠ {s2Label2}</option>
+                  <option value="greater">{s2Label1} &gt; {s2Label2}</option>
+                  <option value="less">{s2Label1} &lt; {s2Label2}</option>
                 </select>
               </div>
             )}
@@ -445,50 +570,312 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                 {anovaInputType === 'stacked' ? (
                   <>
                     <label className="block text-xs uppercase text-slate-500 font-bold">Value Column</label>
-                    <select className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm" value={anovaValueId} onChange={e => setAnovaValueId(e.target.value)}>
+                    <select className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm text-slate-200" value={anovaValueId} onChange={e => setAnovaValueId(e.target.value)}>
                       <option value="">Select Variable...</option>
                       {datasets.filter(d => d.isNumeric).map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
                     </select>
                     <label className="block text-xs uppercase text-slate-500 font-bold">Group Column</label>
-                    <select className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm" value={anovaGroupId} onChange={e => setAnovaGroupId(e.target.value)}>
+                    <select className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm text-slate-200" value={anovaGroupId} onChange={e => setAnovaGroupId(e.target.value)}>
                       <option value="">Select Category...</option>
                       {datasets.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
                     </select>
                   </>
                 ) : (
-                  <div className="space-y-2">
-                    <label className="block text-xs uppercase text-slate-500 font-bold">Data Columns (Min 3)</label>
+                  <div className="space-y-4">
+                    <label className="block text-xs uppercase text-slate-500 font-bold">Data Columns & Labels (Min 3)</label>
                     {anovaMultiIds.map((id, idx) => (
-                      <select 
-                        key={idx}
-                        className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm mb-1" 
-                        value={id} 
-                        onChange={e => {
-                          const newIds = [...anovaMultiIds];
-                          newIds[idx] = e.target.value;
-                          setAnovaMultiIds(newIds);
-                        }}
-                      >
-                        <option value="">Select Group {idx + 1}...</option>
-                        {datasets.filter(d => d.isNumeric).map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-                      </select>
+                      <div key={idx} className="flex gap-2 items-center">
+                        <input 
+                          type="text" 
+                          value={anovaCustomLabels[idx]} 
+                          onChange={e => {
+                            const newLabels = [...anovaCustomLabels];
+                            newLabels[idx] = e.target.value;
+                            setAnovaCustomLabels(newLabels);
+                          }}
+                          className="w-1/3 bg-slate-900 border border-slate-600 rounded p-1 text-[10px] text-sky-400"
+                          placeholder={`Group ${idx+1}`}
+                        />
+                        <select 
+                          className="flex-1 bg-slate-900 border border-slate-600 rounded p-1 text-xs text-slate-200" 
+                          value={id} 
+                          onChange={e => {
+                            const newIds = [...anovaMultiIds];
+                            newIds[idx] = e.target.value;
+                            setAnovaMultiIds(newIds);
+                          }}
+                        >
+                          <option value="">Select Dataset...</option>
+                          {datasets.filter(d => d.isNumeric).map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                        </select>
+                      </div>
                     ))}
-                    <button 
-                      onClick={() => setAnovaMultiIds([...anovaMultiIds, ''])}
-                      className="text-[10px] text-sky-400 hover:text-sky-300 underline font-bold uppercase tracking-tighter"
-                    >
-                      + Add Group
-                    </button>
-                    {anovaMultiIds.length > 3 && (
+                    <div className="flex gap-4">
                       <button 
-                        onClick={() => setAnovaMultiIds(anovaMultiIds.slice(0, -1))}
-                        className="text-[10px] text-red-400 hover:text-red-300 underline font-bold uppercase tracking-tighter ml-4"
+                        onClick={() => {
+                          setAnovaMultiIds([...anovaMultiIds, '']);
+                          setAnovaCustomLabels([...anovaCustomLabels, `Group ${anovaMultiIds.length + 1}`]);
+                        }}
+                        className="text-[10px] text-sky-400 hover:text-sky-300 underline font-bold uppercase tracking-tighter"
                       >
-                        - Remove Group
+                        + Add Group
                       </button>
-                    )}
+                      {anovaMultiIds.length > 3 && (
+                        <button 
+                          onClick={() => {
+                            setAnovaMultiIds(anovaMultiIds.slice(0, -1));
+                            setAnovaCustomLabels(anovaCustomLabels.slice(0, -1));
+                          }}
+                          className="text-[10px] text-red-400 hover:text-red-300 underline font-bold uppercase tracking-tighter"
+                        >
+                          - Remove Group
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )}
+              </div>
+            )}
+
+            {activeTab === 'chi-square' && (
+              <div className="space-y-4">
+                <label className="block text-xs uppercase text-slate-500 font-bold">Test Type</label>
+                <div className="flex bg-slate-900 p-1 rounded border border-slate-700">
+                  <button 
+                    onClick={() => setChiType('independence')}
+                    className={`flex-1 py-1 text-xs rounded transition ${chiType === 'independence' ? 'bg-slate-700 text-white' : 'text-slate-500 hover:text-slate-300'}`}
+                  >
+                    Independence
+                  </button>
+                  <button 
+                    onClick={() => setChiType('gof')}
+                    className={`flex-1 py-1 text-xs rounded transition ${chiType === 'gof' ? 'bg-slate-700 text-white' : 'text-slate-500 hover:text-slate-300'}`}
+                  >
+                    GOF
+                  </button>
+                </div>
+
+                {chiType === 'independence' && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] uppercase text-slate-500 font-bold mb-1">Rows Label</label>
+                      <input 
+                        type="text" 
+                        value={chiLabelR} 
+                        onChange={e => setChiLabelR(e.target.value)} 
+                        className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-xs text-sky-400"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] uppercase text-slate-500 font-bold mb-1">Cols Label</label>
+                      <input 
+                        type="text" 
+                        value={chiLabelC} 
+                        onChange={e => setChiLabelC(e.target.value)} 
+                        className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-xs text-sky-400"
+                      />
+                    </div>
+                  </div>
+                )}
+                {chiType === 'independence' ? (
+                  <>
+                    <label className="block text-xs uppercase text-slate-500 font-bold">Observed Counts (Comma-separated matrix)</label>
+                    <textarea 
+                      value={chiObsText} 
+                      onChange={e => setChiObsText(e.target.value)} 
+                      rows={4}
+                      className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm font-mono"
+                      placeholder="Row 1: 10, 20&#10;Row 2: 30, 40"
+                    />
+                  </>
+                ) : (
+                  <>
+                    <label className="block text-xs uppercase text-slate-500 font-bold">Observed Counts</label>
+                    <input type="text" value={chiGOFObs} onChange={e => setChiGOFObs(e.target.value)} className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm" placeholder="e.g. 50, 40, 60" />
+                    <label className="block text-xs uppercase text-slate-500 font-bold">Expected Counts</label>
+                    <input type="text" value={chiGOFExp} onChange={e => setChiGOFExp(e.target.value)} className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm" placeholder="e.g. 50, 50, 50" />
+                  </>
+                )}
+              </div>
+            )}
+
+            {activeTab === 'proportion' && (
+              <div className="space-y-4">
+                <div className="p-3 bg-slate-800 rounded border border-slate-700">
+                  <label className="block text-[10px] uppercase text-sky-400 font-bold mb-2">Global Settings</label>
+                  
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-[10px] text-slate-400 mb-1">Null Hypothesis (H₀: Diff)</label>
+                      <input 
+                        type="number" 
+                        value={0} 
+                        disabled 
+                        className="w-full bg-green-500/20 border border-green-500/50 rounded p-1 text-xs text-green-400 font-mono" 
+                      />
+                    </div>
+                    
+                    <div>
+                      <label className="block text-[10px] text-slate-400 mb-1">Alternate Hypothesis (H₁)</label>
+                      <select 
+                        value={propAlt} 
+                        onChange={e => setPropAlt(e.target.value)}
+                        className="w-full bg-green-500/20 border border-green-500/50 rounded p-1 text-xs text-green-400 font-bold cursor-pointer"
+                      >
+                        <option value="neq">P1 ≠ P2</option>
+                        <option value="greater">P1 {'>'} P2</option>
+                        <option value="less">P1 {'<'} P2</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] text-slate-400 mb-1">Use pooled est of p?</label>
+                      <select 
+                        value={pPooled ? 'Y' : 'N'} 
+                        onChange={e => setPPooled(e.target.value === 'Y')}
+                        className="w-full bg-green-500/20 border border-green-500/50 rounded p-1 text-xs text-green-400 font-bold cursor-pointer"
+                      >
+                        <option value="Y">Y</option>
+                        <option value="N">N</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] text-slate-400 mb-1">Confidence</label>
+                      <div className="bg-green-500/20 border border-green-500/50 rounded p-1 text-xs text-green-400 font-mono">
+                        {(1 - alpha).toFixed(2)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-3 bg-slate-800 rounded border border-slate-700">
+                  <label className="block text-[10px] uppercase text-sky-400 font-bold mb-2">{pLabel1} Inputs</label>
+                  <div className="mb-2">
+                    <label className="block text-[10px] text-slate-500 font-bold mb-1">Sample Name</label>
+                    <input 
+                      type="text" 
+                      value={pLabel1} 
+                      onChange={e => setPLabel1(e.target.value)} 
+                      className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-xs text-sky-400"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] text-slate-500 font-bold">Units</label>
+                      <input type="number" value={pUnits1} onChange={e => setPUnits1(e.target.value === '' ? '' : Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-xs" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-slate-500 font-bold">Opps / Unit</label>
+                      <input type="number" value={pOpps1} onChange={e => setPOpps1(e.target.value === '' ? '' : Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-xs" />
+                    </div>
+                  </div>
+                  <div className="mt-2 text-center py-1 bg-slate-900/50 border border-slate-700 rounded mb-2">
+                    <span className="text-[10px] text-slate-500 mr-2 uppercase">Total Opps (N1):</span>
+                    <span className="text-xs font-mono text-cyan-400">{(Number(pUnits1) * Number(pOpps1)).toLocaleString()}</span>
+                  </div>
+                  <label className="block text-[10px] text-slate-500 font-bold">Defects (X1)</label>
+                  <input type="number" value={pEvents1} onChange={e => setPEvents1(e.target.value === '' ? '' : Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-xs text-amber-400 font-bold" />
+                </div>
+
+                <div className="p-3 bg-slate-800 rounded border border-slate-700">
+                  <label className="block text-[10px] uppercase text-sky-400 font-bold mb-2">{pLabel2} Inputs</label>
+                  <div className="mb-2">
+                    <label className="block text-[10px] text-slate-500 font-bold mb-1">Sample Name</label>
+                    <input 
+                      type="text" 
+                      value={pLabel2} 
+                      onChange={e => setPLabel2(e.target.value)} 
+                      className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-xs text-sky-400"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] text-slate-500 font-bold">Units</label>
+                      <input type="number" value={pUnits2} onChange={e => setPUnits2(e.target.value === '' ? '' : Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-xs" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-slate-500 font-bold">Opps / Unit</label>
+                      <input type="number" value={pOpps2} onChange={e => setPOpps2(e.target.value === '' ? '' : Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-xs" />
+                    </div>
+                  </div>
+                  <div className="mt-2 text-center py-1 bg-slate-900/50 border border-slate-700 rounded mb-2">
+                    <span className="text-[10px] text-slate-500 mr-2 uppercase">Total Opps (N2):</span>
+                    <span className="text-xs font-mono text-cyan-400">{(Number(pUnits2) * Number(pOpps2)).toLocaleString()}</span>
+                  </div>
+                  <label className="block text-[10px] text-slate-500 font-bold">Defects (X2)</label>
+                  <input type="number" value={pEvents2} onChange={e => setPEvents2(e.target.value === '' ? '' : Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-xs text-amber-400 font-bold" />
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'poisson' && (
+              <div className="space-y-4">
+                <label className="block text-xs uppercase text-slate-500 font-bold">Groups</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <input 
+                    type="text" 
+                    value={poiLabel1} 
+                    onChange={e => setPoiLabel1(e.target.value)} 
+                    className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-[10px] text-sky-400" 
+                    placeholder="Name A"
+                  />
+                  <input 
+                    type="text" 
+                    value={poiLabel2} 
+                    onChange={e => setPoiLabel2(e.target.value)} 
+                    className="w-full bg-slate-900 border border-slate-600 rounded p-1 text-[10px] text-sky-400" 
+                    placeholder="Name B"
+                  />
+                </div>
+                <label className="block text-xs uppercase text-slate-500 font-bold">Test Variant</label>
+                <div className="flex bg-slate-900 p-1 rounded border border-slate-700">
+                  <button 
+                    onClick={() => setPoiType('1samp')}
+                    className={`flex-1 py-1 text-xs rounded transition ${poiType === '1samp' ? 'bg-slate-700 text-white' : 'text-slate-500 hover:text-slate-300'}`}
+                  >
+                    1-Sample
+                  </button>
+                  <button 
+                    onClick={() => setPoiType('2samp')}
+                    className={`flex-1 py-1 text-xs rounded transition ${poiType === '2samp' ? 'bg-slate-700 text-white' : 'text-slate-500 hover:text-slate-300'}`}
+                  >
+                    2-Sample
+                  </button>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] uppercase text-slate-500 font-bold mb-1">Occurrences (X1)</label>
+                    <input type="number" value={poiEvents1} onChange={e => setPoiEvents1(e.target.value === '' ? '' : Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm" />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] uppercase text-slate-500 font-bold mb-1">Sample Size (N1)</label>
+                    <input type="number" value={poiSize1} onChange={e => setPoiSize1(e.target.value === '' ? '' : Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm" />
+                  </div>
+                </div>
+                {poiType === '2samp' ? (
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] uppercase text-slate-500 font-bold mb-1">Occurrences (X2)</label>
+                      <input type="number" value={poiEvents2} onChange={e => setPoiEvents2(e.target.value === '' ? '' : Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] uppercase text-slate-500 font-bold mb-1">Sample Size (N2)</label>
+                      <input type="number" value={poiSize2} onChange={e => setPoiSize2(e.target.value === '' ? '' : Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm" />
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <label className="block text-xs uppercase text-slate-500 font-bold">Null Rate (λ₀)</label>
+                    <input type="number" value={poiTargetRate} onChange={e => setPoiTargetRate(e.target.value === '' ? '' : Number(e.target.value))} className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm" step="0.1" />
+                  </>
+                )}
+                <label className="block text-xs uppercase text-slate-500 font-bold">Alternative (H₁)</label>
+                <select className="w-full bg-slate-900 border border-slate-600 rounded p-2 text-sm" value={s2Alt} onChange={e => setS2Alt(e.target.value)}>
+                   <option value="neq">{poiType === '1samp' ? `${poiLabel1} ≠ Target` : `${poiLabel1} ≠ ${poiLabel2}`}</option>
+                   <option value="greater">{poiType === '1samp' ? `${poiLabel1} > Target` : `${poiLabel1} > ${poiLabel2}`}</option>
+                   <option value="less">{poiType === '1samp' ? `${poiLabel1} < Target` : `${poiLabel1} < ${poiLabel2}`}</option>
+                </select>
               </div>
             )}
 
@@ -561,7 +948,7 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                               {
                                 x: s1Results.data.map(v => Number(v)).filter(v => !isNaN(v)),
                                 type: 'box',
-                                name: 'Sample',
+                                name: s1Label,
                                 marker: { color: '#38bdf8' },
                                 boxpoints: 'outliers',
                                 orientation: 'h'
@@ -1036,6 +1423,399 @@ export default function HypothesisModule({ datasets }: { datasets: any[] }) {
                         </div>
                       </div>
                     </ExportWrapper>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'chi-square' && (
+            <div className="bg-slate-800 p-6 rounded-lg border border-slate-700 shadow-xl space-y-8">
+              <h3 className="text-xl font-bold">Chi-Squared Test Results</h3>
+              {!chiResults ? (
+                <div className="h-64 flex items-center justify-center border border-dashed border-slate-700 rounded text-slate-500 italic text-center px-8">
+                  Check input data. Provide at least a 2x2 matrix for independence or 2 categories for GOF.
+                </div>
+              ) : (
+                <div className="space-y-8">
+                  <ExportWrapper fileName="chi-summary">
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-center">
+                      <div className="bg-slate-900 p-4 rounded border border-slate-700">
+                        <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">Chi-Square</div>
+                        <div className="text-2xl font-mono text-amber-500 font-bold">{chiResults.statistic.toFixed(3)}</div>
+                      </div>
+                      <div className="bg-slate-900 p-4 rounded border border-slate-700">
+                        <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">P-Value</div>
+                        <div className={`text-2xl font-mono font-bold ${chiResults.pValue < alpha ? 'text-red-500' : 'text-green-500'}`}>
+                          {chiResults.pValue.toFixed(4)}
+                        </div>
+                      </div>
+                      <div className="bg-slate-900 p-4 rounded border border-slate-700">
+                        <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">DF</div>
+                        <div className="text-2xl font-mono text-slate-200">{chiResults.df}</div>
+                      </div>
+                      <div className="bg-slate-900 p-4 rounded border border-slate-700">
+                        <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">Decision</div>
+                        <div className={`text-xs mt-2 font-bold ${chiResults.pValue < alpha ? 'text-red-400' : 'text-green-400'}`}>
+                          {chiResults.pValue < alpha ? 'REJECT NULL' : 'FAIL TO REJECT'}
+                        </div>
+                      </div>
+                    </div>
+                  </ExportWrapper>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
+                    <div className="bg-slate-900 p-4 rounded border border-slate-700 h-[300px]">
+                      <h4 className="text-xs font-bold text-slate-500 uppercase mb-4 text-center tracking-widest">Residual Analysis / Contributions</h4>
+                      <ResponsiveContainer width="100%" height="85%">
+                         <BarChart data={
+                           chiType === 'gof' 
+                             ? chiGOFObs.split(',').map((v, i) => ({ 
+                                 name: `Cat ${i+1}`, 
+                                 Value: Number(v.trim()),
+                                 Expected: Number(chiGOFExp.split(',')[i]?.trim() || 0)
+                               }))
+                             : chiObsText.split('\n').flatMap((row, i) => row.split(',').map((v, j) => ({
+                                 name: `${chiLabelR.slice(0,3)}${i+1}:${chiLabelC.slice(0,3)}${j+1}`,
+                                 Value: Number(v.trim()),
+                                 Expected: (chiResults as any).expected?.[i]?.[j] || 0
+                               })))
+                         }>
+                           <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                           <XAxis dataKey="name" stroke="#94a3b8" fontSize={10} />
+                           <YAxis stroke="#94a3b8" fontSize={10} />
+                           <Tooltip contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155' }} />
+                           <Legend verticalAlign="top" height={36}/>
+                           <Bar dataKey="Value" fill="#38bdf8" radius={[4, 4, 0, 0]} />
+                           <Bar dataKey="Expected" fill="#64748b" radius={[4, 4, 0, 0]} />
+                         </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+
+                    <div className="bg-slate-900 p-6 rounded border border-slate-700 h-full flex flex-col justify-center">
+                      <p className="text-xs text-slate-300 leading-relaxed italic border-l-4 border-amber-600 pl-4 py-2">
+                        {chiType === 'independence' 
+                          ? "Test evaluates whether there is a significant association between the categorical variables forming the grid."
+                          : "Test evaluates if the observed frequency distribution matches the specified expected distribution."}
+                      </p>
+                      <div className="mt-6 p-4 bg-slate-950 rounded border border-slate-800">
+                        <h5 className="text-[10px] font-bold text-sky-400 uppercase mb-2 italic">Conclusion</h5>
+                        <p className="text-xs text-slate-400 leading-relaxed">
+                           {chiResults.pValue < alpha 
+                             ? "The evidence suggests a significant difference or association exists. The observed values significantly deviate from expectations."
+                             : "There is no significant evidence to suggest the observations differ from the null model."}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'proportion' && (
+            <div className="bg-slate-900 p-6 rounded-lg border border-slate-800 shadow-2xl space-y-8 min-h-[800px]">
+              <div className="flex justify-between items-center bg-slate-800/50 p-4 rounded-t-lg border-b border-slate-700 -mx-6 -mt-6 mb-6">
+                <h3 className="text-2xl font-black italic text-sky-400 uppercase tracking-tighter">Test of Two Proportions Output</h3>
+                <div className="flex gap-4 text-[10px] font-bold text-slate-500">
+                  <span className="flex items-center gap-1"><Activity size={12}/> ENGINE: SIGMA-6</span>
+                  <span className="flex items-center gap-1"><TrendingUp size={12}/> CONFIDENCE: {(1-alpha)*100}%</span>
+                </div>
+              </div>
+
+              {!propResults ? (
+                <div className="h-96 flex items-center justify-center border-2 border-dashed border-slate-800 rounded-xl text-slate-600 font-bold uppercase tracking-widest text-center px-12">
+                  Awaiting Input Grid... Ensure Samples have at least 1 Unit and Opportunities.
+                </div>
+              ) : (
+                <div className="space-y-8">
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                    {/* Visual Plot Area */}
+                    <div className="bg-slate-950 p-6 rounded border border-slate-800 shadow-inner">
+                      <h4 className="text-xs font-black text-slate-500 uppercase mb-4 tracking-widest text-center">Plot of Confidence Intervals</h4>
+                      <div className="h-64">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <ComposedChart
+                            layout="vertical"
+                            data={[
+                              { name: (propResults as any).label1, low: (propResults as any).ci1.lower, high: (propResults as any).ci1.upper, nominal: (propResults as any).ci1.nominal },
+                              { name: (propResults as any).label2, low: (propResults as any).ci2.lower, high: (propResults as any).ci2.upper, nominal: (propResults as any).ci2.nominal }
+                            ]}
+                            margin={{ top: 20, right: 30, left: 20, bottom: 20 }}
+                          >
+                            <CartesianGrid stroke="#1e293b" />
+                            <XAxis 
+                              type="number" 
+                              domain={[0, 'auto']} 
+                              stroke="#64748b" 
+                              fontSize={10} 
+                              tickFormatter={(v) => v.toExponential(1)}
+                            />
+                            <YAxis 
+                              type="category" 
+                              dataKey="name" 
+                              stroke="#64748b" 
+                              fontSize={10} 
+                              width={80}
+                            />
+                            <Tooltip 
+                              contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155' }}
+                              formatter={(v: number) => v.toExponential(4)}
+                            />
+                            <Bar dataKey="low" fill="transparent" stackId="a" />
+                            <Bar dataKey="high" fill="#38bdf844" stackId="a" radius={[0, 4, 4, 0]} />
+                            <Scatter dataKey="nominal" fill="#38bdf8" shape="square" />
+                          </ComposedChart>
+                        </ResponsiveContainer>
+                      </div>
+                      <div className="mt-4 grid grid-cols-2 gap-4">
+                        <div className="text-center p-2 rounded bg-slate-900 border border-slate-800">
+                          <div className="text-[10px] text-slate-500 uppercase font-bold mb-1">P(A) Error Bar</div>
+                          <div className="text-xs text-sky-400 font-mono">{(propResults as any).ci1.lower.toExponential(3)} ↔ {(propResults as any).ci1.upper.toExponential(3)}</div>
+                        </div>
+                        <div className="text-center p-2 rounded bg-slate-900 border border-slate-800">
+                          <div className="text-[10px] text-slate-500 uppercase font-bold mb-1">P(B) Error Bar</div>
+                          <div className="text-xs text-sky-400 font-mono">{(propResults as any).ci2.lower.toExponential(3)} ↔ {(propResults as any).ci2.upper.toExponential(3)}</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Individual Sample Tables */}
+                    <div className="space-y-6">
+                      {/* {pLabel1} Result Box */}
+                      <div className="bg-slate-950 p-4 rounded border-l-4 border-l-green-500 border-y border-r border-slate-800">
+                        <div className="flex justify-between items-center mb-4">
+                          <span className="text-xs font-black text-green-500 uppercase">{(propResults as any).label1} Results</span>
+                          <span className="text-[10px] text-slate-500 bg-slate-900 px-2 py-0.5 rounded">N = {(propResults as any).n1.toLocaleString()}</span>
+                        </div>
+                        <table className="w-full text-xs font-mono">
+                          <thead>
+                            <tr className="text-slate-500 border-b border-slate-800">
+                              <th className="text-left pb-2 font-normal">Metric</th>
+                              <th className="text-right pb-2 font-normal">p(d)</th>
+                              <th className="text-right pb-2 font-normal">ppm</th>
+                              <th className="text-right pb-2 font-normal">Defects</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-900">
+                            <tr>
+                              <td className="py-2 text-slate-400">Upper Limit</td>
+                              <td className="text-right text-red-500">{(propResults as any).ci1.upper.toExponential(4)}</td>
+                              <td className="text-right text-slate-400">{Math.round((propResults as any).ci1.upper * 1000000)}</td>
+                              <td className="text-right text-red-500">{Math.round((propResults as any).ci1.upper * (propResults as any).n1)}</td>
+                            </tr>
+                            <tr className="bg-slate-900/50">
+                              <td className="py-2 text-white font-bold tracking-wider">NOMINAL</td>
+                              <td className="text-right text-white font-bold">{(propResults as any).ci1.nominal.toExponential(4)}</td>
+                              <td className="text-right text-white font-bold">{Math.round((propResults as any).ci1.nominal * 1000000)}</td>
+                              <td className="text-right text-white font-bold">{(propResults as any).e1}</td>
+                            </tr>
+                            <tr>
+                              <td className="py-2 text-slate-400">Lower Limit</td>
+                              <td className="text-right text-green-500">{(propResults as any).ci1.lower.toExponential(4)}</td>
+                              <td className="text-right text-slate-400">{Math.round((propResults as any).ci1.lower * 1000000)}</td>
+                              <td className="text-right text-green-500">{Math.round((propResults as any).ci1.lower * (propResults as any).n1)}</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* {pLabel2} Result Box */}
+                      <div className="bg-slate-950 p-4 rounded border-l-4 border-l-blue-500 border-y border-r border-slate-800">
+                        <div className="flex justify-between items-center mb-4">
+                          <span className="text-xs font-black text-blue-500 uppercase">{(propResults as any).label2} Results</span>
+                          <span className="text-[10px] text-slate-500 bg-slate-900 px-2 py-0.5 rounded">N = {(propResults as any).n2.toLocaleString()}</span>
+                        </div>
+                        <table className="w-full text-xs font-mono">
+                          <thead>
+                            <tr className="text-slate-500 border-b border-slate-800">
+                              <th className="text-left pb-2 font-normal">Metric</th>
+                              <th className="text-right pb-2 font-normal">p(d)</th>
+                              <th className="text-right pb-2 font-normal">ppm</th>
+                              <th className="text-right pb-2 font-normal">Defects</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-900">
+                            <tr>
+                              <td className="py-2 text-slate-400">Upper Limit</td>
+                              <td className="text-right text-red-500">{(propResults as any).ci2.upper.toExponential(4)}</td>
+                              <td className="text-right text-slate-400">{Math.round((propResults as any).ci2.upper * 1000000)}</td>
+                              <td className="text-right text-red-500">{Math.round((propResults as any).ci2.upper * (propResults as any).n2)}</td>
+                            </tr>
+                            <tr className="bg-slate-900/50">
+                              <td className="py-2 text-white font-bold tracking-wider">NOMINAL</td>
+                              <td className="text-right text-white font-bold">{(propResults as any).ci2.nominal.toExponential(4)}</td>
+                              <td className="text-right text-white font-bold">{Math.round((propResults as any).ci2.nominal * 1000000)}</td>
+                              <td className="text-right text-white font-bold">{(propResults as any).e2}</td>
+                            </tr>
+                            <tr>
+                              <td className="py-2 text-slate-400">Lower Limit</td>
+                              <td className="text-right text-green-500">{(propResults as any).ci2.lower.toExponential(4)}</td>
+                              <td className="text-right text-slate-400">{Math.round((propResults as any).ci2.lower * 1000000)}</td>
+                              <td className="text-right text-green-500">{Math.round((propResults as any).ci2.lower * (propResults as any).n2)}</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Summary Comparison Output */}
+                  <div className="bg-slate-950 p-8 rounded border-2 border-slate-800 shadow-2xl overflow-x-auto">
+                    <h4 className="text-center font-black italic text-xl text-slate-300 uppercase mb-8 tracking-[0.2em] border-b border-slate-800 pb-4">Statistical Comparison Results</h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-12 items-start">
+                      
+                      <div className="space-y-4">
+                        <table className="w-full text-xs font-mono border-collapse">
+                          <thead>
+                            <tr className="border-b border-slate-800 uppercase italic">
+                              <th className="text-left py-2 text-slate-500">Sample</th>
+                              <th className="text-center py-2 text-sky-400">X</th>
+                              <th className="text-center py-2 text-sky-400">N</th>
+                              <th className="text-right py-2 text-sky-400">P-Hat</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-900">
+                            <tr>
+                              <td className="py-3 text-slate-400">{(propResults as any).label1}</td>
+                              <td className="text-center text-slate-200">{(propResults as any).e1}</td>
+                              <td className="text-center text-slate-200">{(propResults as any).n1.toLocaleString()}</td>
+                              <td className="text-right text-slate-200">{(propResults as any).p1.toExponential(4)}</td>
+                            </tr>
+                            <tr>
+                              <td className="py-3 text-slate-400">{(propResults as any).label2}</td>
+                              <td className="text-center text-slate-200">{(propResults as any).e2}</td>
+                              <td className="text-center text-slate-200">{(propResults as any).n2.toLocaleString()}</td>
+                              <td className="text-right text-slate-200">{(propResults as any).p2.toExponential(4)}</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                        <div className="p-3 bg-slate-900 rounded border border-slate-800 text-[10px] text-center text-slate-500 italic">
+                          Difference = p(1) - p(2)
+                        </div>
+                      </div>
+
+                      <div className="space-y-6">
+                        <div className="group border-b border-slate-800 pb-4">
+                          <label className="block text-[10px] text-slate-500 uppercase font-black mb-2 tracking-widest">Estimate of Difference</label>
+                          <div className="text-2xl font-mono text-red-400 font-black tabular-nums">
+                            {(propResults as any).diff.toExponential(8)}
+                          </div>
+                        </div>
+
+                        <div className="group border-b border-slate-800 pb-4">
+                          <label className="block text-[10px] text-slate-500 uppercase font-black mb-2 tracking-widest">
+                            {(1-alpha)*100}% Bound for Difference
+                          </label>
+                          <div className="text-xl font-mono text-red-500 font-black tabular-nums">
+                            {(propResults as any).diffLower !== null 
+                              ? (propResults as any).diffLower.toExponential(8) 
+                              : (propResults as any).diffUpper?.toExponential(8)}
+                          </div>
+                          <div className="text-[10px] text-slate-600 mt-1 italic uppercase">
+                            Analysis based on {propAlt} alternative
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-6">
+                        <div className="grid grid-cols-2 gap-8">
+                          <div className="bg-slate-900 p-4 border border-slate-800 rounded">
+                            <label className="block text-[10px] text-slate-500 uppercase font-black mb-2 tracking-widest">Z-Stat</label>
+                            <div className="text-2xl font-mono text-white">{(propResults as any).statistic.toFixed(2)}</div>
+                          </div>
+                          <div className={`p-4 border rounded ${propResults.pValue < alpha ? 'bg-red-500/10 border-red-500/50' : 'bg-green-500/10 border-green-500/50'}`}>
+                            <label className="block text-[10px] text-slate-500 uppercase font-black mb-2 tracking-widest">P-Value</label>
+                            <div className={`text-2xl font-mono font-black ${propResults.pValue < alpha ? 'text-red-500' : 'text-green-500'}`}>
+                              {propResults.pValue.toFixed(4)}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'poisson' && (
+            <div className="bg-slate-800 p-6 rounded-lg border border-slate-700 shadow-xl space-y-8">
+              <h3 className="text-xl font-bold">Poisson Rate Test Results</h3>
+              {!poiResults ? (
+                <div className="h-64 flex items-center justify-center border border-dashed border-slate-700 rounded text-slate-500 italic">
+                  Complete input fields. Size must be {'>'} 0.
+                </div>
+              ) : (
+                <div className="space-y-8">
+                   <ExportWrapper fileName="poisson-summary">
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-center">
+                      <div className="bg-slate-900 p-4 rounded border border-slate-700">
+                        <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">Test Statistic</div>
+                        <div className="text-2xl font-mono text-purple-500 font-bold">{poiResults.statistic.toFixed(4)}</div>
+                      </div>
+                      <div className="bg-slate-900 p-4 rounded border border-slate-700">
+                        <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">P-Value</div>
+                        <div className={`text-2xl font-mono font-bold ${poiResults.pValue < alpha ? 'text-red-500' : 'text-green-500'}`}>
+                          {poiResults.pValue.toFixed(4)}
+                        </div>
+                      </div>
+                      <div className="bg-slate-900 p-4 rounded border border-slate-700">
+                        <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">{poiType === '1samp' ? 'Obs. Rate' : 'Diff (R1-R2)'}</div>
+                        <div className="text-2xl font-mono text-slate-200">
+                           {poiType === '1samp' ? (poiResults as any).rate.toFixed(4) : ((poiResults as any).r1 - (poiResults as any).r2).toFixed(4)}
+                        </div>
+                      </div>
+                      <div className="bg-slate-900 p-4 rounded border border-slate-700">
+                        <div className="text-xs text-slate-500 uppercase font-bold tracking-wider mb-2">Decision</div>
+                        <div className={`text-xs mt-2 font-bold ${poiResults.pValue < alpha ? 'text-red-400' : 'text-green-400'}`}>
+                          {poiResults.pValue < alpha ? 'REJECT NULL' : 'FAIL TO REJECT'}
+                        </div>
+                      </div>
+                    </div>
+                  </ExportWrapper>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    <div className="bg-slate-900 p-4 rounded border border-slate-700 h-[300px]">
+                       <h4 className="text-xs font-bold text-slate-500 uppercase mb-4 text-center tracking-widest">Rate Comparison</h4>
+                       <ResponsiveContainer width="100%" height="85%">
+                         <BarChart data={
+                           poiType === '1samp' 
+                             ? [{ name: (poiResults as any).label1, Rate: (poiResults as any).rate, Null: (poiResults as any).targetRate }]
+                             : [
+                                 { name: (poiResults as any).label1, Rate: (poiResults as any).r1 },
+                                 { name: (poiResults as any).label2, Rate: (poiResults as any).r2 }
+                               ]
+                         }>
+                           <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                           <XAxis dataKey="name" stroke="#94a3b8" fontSize={10} />
+                           <YAxis stroke="#94a3b8" fontSize={10} />
+                           <Tooltip contentStyle={{ backgroundColor: '#0f172a' }} />
+                           <Bar dataKey="Rate" fill="#a78bfa" radius={[4, 4, 0, 0]} />
+                           {poiType === '1samp' && <Bar dataKey="Null" fill="#64748b" radius={[4, 4, 0, 0]} />}
+                         </BarChart>
+                       </ResponsiveContainer>
+                    </div>
+
+                    <div className="bg-slate-900 p-6 rounded border border-slate-700 flex flex-col justify-center h-full">
+                      <div className="space-y-4 text-xs">
+                         <div className="bg-slate-950 p-3 rounded border border-slate-800">
+                            <p className="text-[10px] text-slate-500 uppercase font-bold mb-2">Context</p>
+                            <p className="text-slate-400 leading-relaxed">
+                               {poiType === '1samp' 
+                                 ? `Testing if an observed ${(poiResults as any).events} occurrences over ${(poiResults as any).sampleSize} units significantly deviates from expected rate of ${(poiResults as any).targetRate}.`
+                                 : `Testing difference between Rate 1 (${(poiResults as any).r1.toFixed(4)}) and Rate 2 (${(poiResults as any).r2.toFixed(4)}).`}
+                            </p>
+                         </div>
+                         <div className="mt-4 p-4 bg-slate-950 rounded border border-slate-800">
+                            <h5 className="text-[10px] font-bold text-purple-400 uppercase mb-2 italic">Statistical Note</h5>
+                            <p className="text-[10px] text-slate-500">
+                               {poiType === '1samp' 
+                                 ? "Calculated using exact Poisson distribution probabilities."
+                                 : "Calculated using Z-test approximation for Poisson rate difference."}
+                            </p>
+                         </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               )}

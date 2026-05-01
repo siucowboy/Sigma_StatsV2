@@ -669,6 +669,200 @@ export function getConfidenceInterval(data: number[], confidence = 0.95) {
   };
 }
 
+// --- Chi-Squared Tests ---
+
+export function runChiSquareGoodnessOfFit(observed: number[], expected: number[]) {
+  const n = observed.length;
+  if (n < 2) return null;
+
+  let chi2 = 0;
+  for (let i = 0; i < n; i++) {
+    const e = expected[i];
+    if (e <= 0) continue;
+    chi2 += Math.pow(observed[i] - e, 2) / e;
+  }
+
+  const df = n - 1;
+  const pValue = 1 - jStat.chisquare.cdf(chi2, df);
+
+  return { statistic: chi2, pValue, df, expected, testName: 'Chi-Square Goodness-of-Fit' };
+}
+
+export function runChiSquareIndependence(matrix: number[][]) {
+  const rows = matrix.length;
+  const cols = matrix[0].length;
+  if (rows < 2 || cols < 2) return null;
+
+  const rowTotals = matrix.map(r => r.reduce((a, b) => a + b, 0));
+  const colTotals = Array(cols).fill(0).map((_, j) => matrix.reduce((acc, r) => acc + r[j], 0));
+  const grandTotal = rowTotals.reduce((a, b) => a + b, 0);
+
+  if (grandTotal === 0) return null;
+
+  let chi2 = 0;
+  const expected: number[][] = [];
+  
+  for (let i = 0; i < rows; i++) {
+    expected[i] = [];
+    for (let j = 0; j < cols; j++) {
+      const e = (rowTotals[i] * colTotals[j]) / grandTotal;
+      expected[i][j] = e;
+      if (e > 0) {
+        chi2 += Math.pow(matrix[i][j] - e, 2) / e;
+      }
+    }
+  }
+
+  const df = (rows - 1) * (cols - 1);
+  const pValue = 1 - jStat.chisquare.cdf(chi2, df);
+
+  return { statistic: chi2, pValue, df, expected, testName: 'Chi-Square Test of Independence' };
+}
+
+// --- Proportion Tests ---
+
+export function run1SampleProportion(events: number, trials: number, target: number, alternative: string = 'neq') {
+  if (trials <= 0) return null;
+  const p = events / trials;
+  
+  // Z-test approximation (standard for large-ish samples)
+  // Null hypothesis: Proportion = target
+  const se = Math.sqrt((target * (1 - target)) / trials);
+  const z = se === 0 ? 0 : (p - target) / se;
+
+  let pValue: number;
+  if (alternative === 'greater') {
+    pValue = 1 - jStat.normal.cdf(z, 0, 1);
+  } else if (alternative === 'less') {
+    pValue = jStat.normal.cdf(z, 0, 1);
+  } else {
+    pValue = 2 * (1 - jStat.normal.cdf(Math.abs(z), 0, 1));
+  }
+
+  return { statistic: z, pValue, p, trials, events, target, testName: '1-Sample Proportion (Z-Test)' };
+}
+
+export function run2SampleProportion(e1: number, n1: number, e2: number, n2: number, alternative: string = 'neq', pooled: boolean = true, confidence: number = 0.95) {
+  if (n1 <= 0 || n2 <= 0) return null;
+  const p1 = e1 / n1;
+  const p2 = e2 / n2;
+  const diff = p1 - p2;
+  
+  // Test Statistic (using pooled estimate if selected)
+  const pPool = (e1 + e2) / (n1 + n2);
+  const seTest = pooled 
+    ? Math.sqrt(pPool * (1 - pPool) * (1 / n1 + 1 / n2))
+    : Math.sqrt((p1 * (1 - p1) / n1) + (p2 * (1 - p2) / n2));
+  
+  const z = seTest === 0 ? 0 : diff / seTest;
+
+  let pValue: number;
+  if (alternative === 'greater') {
+    pValue = 1 - jStat.normal.cdf(z, 0, 1);
+  } else if (alternative === 'less') {
+    pValue = jStat.normal.cdf(z, 0, 1);
+  } else {
+    pValue = 2 * (1 - jStat.normal.cdf(Math.abs(z), 0, 1));
+  }
+
+  // Confidence Intervals for individual proportions (Wilson Score interval or normal approx)
+  const zAlpha = jStat.normal.inv(1 - (1 - confidence) / 2, 0, 1);
+  const getCI = (events: number, trials: number) => {
+    const phat = events / trials;
+    const se = Math.sqrt((phat * (1 - phat)) / trials);
+    return {
+      nominal: phat,
+      lower: Math.max(0, phat - zAlpha * se),
+      upper: Math.min(1, phat + zAlpha * se)
+    };
+  };
+
+  // Confidence Bound for the Difference (Normal approximation)
+  const seDiff = Math.sqrt((p1 * (1 - p1) / n1) + (p2 * (1 - p2) / n2));
+  let diffLower: number | null = null;
+  let diffUpper: number | null = null;
+
+  if (alternative === 'greater') {
+    // 1-sided lower bound
+    const zCrit = jStat.normal.inv(confidence, 0, 1);
+    diffLower = diff - zCrit * seDiff;
+  } else if (alternative === 'less') {
+    // 1-sided upper bound
+    const zCrit = jStat.normal.inv(confidence, 0, 1);
+    diffUpper = diff + zCrit * seDiff;
+  } else {
+    // 2-sided
+    diffLower = diff - zAlpha * seDiff;
+    diffUpper = diff + zAlpha * seDiff;
+  }
+
+  return { 
+    statistic: z, 
+    pValue, 
+    p1, p2, n1, n2, e1, e2, 
+    diff,
+    diffLower,
+    diffUpper,
+    ci1: getCI(e1, n1),
+    ci2: getCI(e2, n2),
+    testName: '2-Sample Proportion' 
+  };
+}
+
+// --- Poisson Tests ---
+
+export function run1SamplePoisson(events: number, sampleSize: number, targetRate: number, alternative: string = 'neq') {
+  if (sampleSize <= 0) return null;
+  const rate = events / sampleSize;
+  const lambda = targetRate * sampleSize;
+
+  // Exact Poisson p-values
+  let pValue: number;
+  if (alternative === 'greater') {
+    // P(X >= events) = 1 - P(X <= events - 1)
+    pValue = 1 - (events === 0 ? 0 : jStat.poisson.cdf(events - 1, lambda));
+  } else if (alternative === 'less') {
+    // P(X <= events)
+    pValue = jStat.poisson.cdf(events, lambda);
+  } else {
+    // Two-sided is trickier for Poisson, sum probabilities less than or equal to current point
+    const pObs = jStat.poisson.pdf(events, lambda);
+    // Find points where PDF <= pObs
+    // Simplified: iterate to a reasonable bound
+    let sumP = 0;
+    const bound = Math.ceil(lambda * 3 + 10);
+    for (let x = 0; x <= bound; x++) {
+      const p = jStat.poisson.pdf(x, lambda);
+      if (p <= pObs + 0.0000001) sumP += p;
+    }
+    pValue = Math.min(1, sumP);
+  }
+
+  return { statistic: rate, pValue, rate, events, sampleSize, targetRate, testName: '1-Sample Poisson Rate Test' };
+}
+
+export function run2SamplePoisson(e1: number, s1: number, e2: number, s2: number, alternative: string = 'neq') {
+  if (s1 <= 0 || s2 <= 0) return null;
+  const r1 = e1 / s1;
+  const r2 = e2 / s2;
+  
+  // Z-test approximation for difference in Poisson rates
+  // Se = sqrt(r1/s1 + r2/s2)
+  const se = Math.sqrt(r1 / s1 + r2 / s2);
+  const z = se === 0 ? 0 : (r1 - r2) / se;
+
+  let pValue: number;
+  if (alternative === 'greater') {
+    pValue = 1 - jStat.normal.cdf(z, 0, 1);
+  } else if (alternative === 'less') {
+    pValue = jStat.normal.cdf(z, 0, 1);
+  } else {
+    pValue = 2 * (1 - jStat.normal.cdf(Math.abs(z), 0, 1));
+  }
+
+  return { statistic: z, pValue, r1, r2, s1, s2, e1, e2, testName: '2-Sample Poisson Rate (Z-Test)' };
+}
+
 export function getMedianConfidenceInterval(data: number[], confidence = 0.95) {
   // Using Thompson-Savur (Non-parametric)
   const n = data.length;
